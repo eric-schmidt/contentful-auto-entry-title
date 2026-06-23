@@ -1,118 +1,149 @@
-import Field from './Field';
-import { render, screen } from '@testing-library/react';
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import Field from "./Field";
+import { render, screen } from "@testing-library/react";
+import { vi, describe, it, expect, beforeEach } from "vitest";
+import type { FragmentEmitter, FragmentStrategy } from "../strategies/types";
 
-type Listener = (value: unknown) => void;
-
-const buildSdk = (replacementPattern: string | undefined) => {
-  const listeners: Record<string, Record<string, Listener>> = {
-    brand: { 'en-US': () => {}, 'de-DE': () => {} },
-    productName: { 'en-US': () => {}, 'de-DE': () => {} },
-  };
-  const unsubscribe = vi.fn();
-  const targetSetValue = vi.fn();
-
-  const makeSourceField = (id: 'brand' | 'productName', values: Record<string, unknown>) => ({
-    id,
-    locales: ['en-US', 'de-DE'],
-    getValue: (locale: string) => values[locale],
-    onValueChanged: (locale: string, cb: Listener) => {
-      listeners[id][locale] = cb;
-      return unsubscribe;
-    },
-  });
-
-  const sdk = {
-    parameters: { instance: { replacementPattern } },
-    locales: { available: ['en-US', 'de-DE'], default: 'en-US' },
-    field: { id: 'title', locale: 'en-US' },
-    window: { startAutoResizer: vi.fn() },
-    entry: {
-      fields: {
-        brand: makeSourceField('brand', { 'en-US': 'Acme', 'de-DE': 'Akme' }),
-        productName: makeSourceField('productName', {
-          'en-US': 'Widget',
-          'de-DE': 'Gerät',
-        }),
-        title: {
-          id: 'title',
-          locales: ['en-US', 'de-DE'],
-          setValue: targetSetValue,
-        },
-      },
-    },
+vi.mock("../strategies", () => {
+  const teardownA = vi.fn();
+  const teardownB = vi.fn();
+  const refs: {
+    emitA: FragmentEmitter;
+    emitB: FragmentEmitter;
+  } = {
+    emitA: () => {},
+    emitB: () => {},
   };
 
-  return { sdk, listeners, unsubscribe, targetSetValue };
+  const fragmentA: FragmentStrategy = ({ emit }) => {
+    refs.emitA = emit;
+    return teardownA;
+  };
+  const fragmentB: FragmentStrategy = ({ emit }) => {
+    refs.emitB = emit;
+    return teardownB;
+  };
+
+  return {
+    composition: {
+      fragments: [fragmentA, fragmentB],
+      separator: " - ",
+    },
+    __testRefs: refs,
+    __teardownA: teardownA,
+    __teardownB: teardownB,
+  };
+});
+
+import * as strategiesModule from "../strategies";
+
+const mocked = strategiesModule as unknown as {
+  __testRefs: { emitA: FragmentEmitter; emitB: FragmentEmitter };
+  __teardownA: ReturnType<typeof vi.fn>;
+  __teardownB: ReturnType<typeof vi.fn>;
 };
 
-let currentSdk: ReturnType<typeof buildSdk>['sdk'];
-vi.mock('@contentful/react-apps-toolkit', () => ({
+const buildSdk = (initialValue = "") => {
+  let value = initialValue;
+  const setValue = vi.fn((next: string) => {
+    value = next;
+  });
+  const getValue = vi.fn(() => value);
+
+  return {
+    locales: { available: ["en-US"], default: "en-US" },
+    field: {
+      id: "title",
+      locale: "en-US",
+      getValue,
+      setValue,
+    },
+    window: { startAutoResizer: vi.fn() },
+  };
+};
+
+let currentSdk: ReturnType<typeof buildSdk>;
+vi.mock("@contentful/react-apps-toolkit", () => ({
   useSDK: () => currentSdk,
 }));
 
-vi.mock('@contentful/field-editor-single-line', () => ({
+vi.mock("@contentful/field-editor-single-line", () => ({
   SingleLineEditor: (props: { isInitiallyDisabled?: boolean }) => (
-    <div data-test-id="single-line-editor" data-disabled={String(!!props.isInitiallyDisabled)} />
+    <div
+      data-test-id="single-line-editor"
+      data-disabled={String(!!props.isInitiallyDisabled)}
+    />
   ),
 }));
 
-describe('Field component', () => {
+describe("Field component", () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    mocked.__teardownA.mockReset();
+    mocked.__teardownB.mockReset();
+    mocked.__testRefs.emitA = () => {};
+    mocked.__testRefs.emitB = () => {};
   });
 
-  it('renders the disabled SingleLineEditor when configured', () => {
-    const { sdk } = buildSdk('[brand] - [productName]');
-    currentSdk = sdk;
+  it("renders the disabled SingleLineEditor and starts the auto-resizer", () => {
+    currentSdk = buildSdk();
 
     render(<Field />);
 
-    const editor = screen.getByTestId('single-line-editor');
-    expect(editor).toHaveAttribute('data-disabled', 'true');
-    expect(sdk.window.startAutoResizer).toHaveBeenCalled();
+    const editor = screen.getByTestId("single-line-editor");
+    expect(editor).toHaveAttribute("data-disabled", "true");
+    expect(currentSdk.window.startAutoResizer).toHaveBeenCalled();
   });
 
-  it('renders a configuration warning when replacementPattern is missing', () => {
-    const { sdk } = buildSdk(undefined);
-    currentSdk = sdk;
+  it("composes fragment emits with the configured separator and writes via sdk.field.setValue", () => {
+    currentSdk = buildSdk();
 
     render(<Field />);
 
-    expect(screen.getByText(/Missing configuration/i)).toBeInTheDocument();
-    expect(screen.queryByTestId('single-line-editor')).not.toBeInTheDocument();
+    mocked.__testRefs.emitA("A");
+    mocked.__testRefs.emitB("B");
+
+    expect(currentSdk.field.setValue).toHaveBeenLastCalledWith("A - B");
+
+    mocked.__testRefs.emitB("C");
+    expect(currentSdk.field.setValue).toHaveBeenLastCalledWith("A - C");
   });
 
-  it('updates only the changed locale on a source field change', () => {
-    const built = buildSdk('[brand] - [productName]');
-    currentSdk = built.sdk;
+  it("omits empty fragments from the joined output (no orphan separators)", () => {
+    currentSdk = buildSdk();
 
     render(<Field />);
 
-    built.listeners.brand['en-US']('NewBrand');
+    mocked.__testRefs.emitA("A");
 
-    expect(built.targetSetValue).toHaveBeenCalledTimes(1);
-    expect(built.targetSetValue).toHaveBeenCalledWith('Acme - Widget', 'en-US');
+    expect(currentSdk.field.setValue).toHaveBeenLastCalledWith("A");
 
-    (built.sdk.entry.fields.brand as unknown as {
-      getValue: (l: string) => unknown;
-    }).getValue = (locale: string) => (locale === 'en-US' ? 'NewBrand' : 'Akme');
-
-    built.listeners.brand['en-US']('NewBrand');
-    expect(built.targetSetValue).toHaveBeenLastCalledWith('NewBrand - Widget', 'en-US');
-    expect(
-      built.targetSetValue.mock.calls.every(([, locale]) => locale === 'en-US'),
-    ).toBe(true);
+    mocked.__testRefs.emitB("B");
+    expect(currentSdk.field.setValue).toHaveBeenLastCalledWith("A - B");
   });
 
-  it('unsubscribes all listeners on unmount', () => {
-    const built = buildSdk('[brand] - [productName]');
-    currentSdk = built.sdk;
+  it("skips setValue when a re-emit produces the same composed value", () => {
+    currentSdk = buildSdk();
+
+    render(<Field />);
+
+    mocked.__testRefs.emitA("A");
+    mocked.__testRefs.emitB("B");
+
+    const writesAfterInitial = currentSdk.field.setValue.mock.calls.length;
+    expect(currentSdk.field.setValue).toHaveBeenLastCalledWith("A - B");
+
+    mocked.__testRefs.emitA("A");
+    mocked.__testRefs.emitB("B");
+
+    expect(currentSdk.field.setValue.mock.calls.length).toBe(writesAfterInitial);
+  });
+
+  it("invokes every fragment teardown on unmount", () => {
+    currentSdk = buildSdk();
 
     const { unmount } = render(<Field />);
     unmount();
 
-    // 2 tokens * 2 locales = 4 listeners registered → 4 unsubscribes.
-    expect(built.unsubscribe).toHaveBeenCalledTimes(4);
+    expect(mocked.__teardownA).toHaveBeenCalledTimes(1);
+    expect(mocked.__teardownB).toHaveBeenCalledTimes(1);
   });
 });

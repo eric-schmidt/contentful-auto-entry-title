@@ -2,7 +2,9 @@ This project was bootstrapped with [Create Contentful App](https://github.com/co
 
 ## Overview
 
-The main goal of this app is to allow content modelers the ability automatically generate the value of a field based on the values of other fields. An example use case is concatenating a first and last name field into the entry title for an author.
+The main goal of this app is to automatically generate the value of an entry's title field by composing an ordered list of fragment strategies — small modules that each contribute one piece of the final string (e.g., a value pulled from another field, a Launch Release scheduled date, a fixed prefix). Fragments are concatenated with a configurable separator and written to the field on which the app is mounted.
+
+This app is intended for non-localized entry-title fields. The composed value is written via `sdk.field.setValue`, which targets the locale of the mounted field.
 
 ## Deployment
 
@@ -12,9 +14,20 @@ This app uses https://github.com/contentful/actions-app-deploy to automatically 
 
 1. Install the app to your space, either via Contentful hosting or by cloning this repo and running `npm install` and `npm start` (hosted at http://localhost:3000).
 2. Enable for Short Text entry fields (the only field type currently supported).
-3. Add an instance parameter called Replacement Pattern (`replacementPattern`) of type Short Text, which will be used to allow content modelers to specify which fields to use as tokens for this fields value. Here is some example help text to add for this instance parameter: `A tokenized pattern of field IDs on this content type that will be used for replacement. Please wrap all tokens in square brackets (e.g. [fieldId]).`
-4. Create a Short Text field on a content type and edit its appearance to use the Auto Field Value widget.
-5. Update the Replacement Pattern field the above field's appearance configuration dialog to contain references to other Short Text field IDs tokenized with square brackets (e.g. `[fieldId]`). Note that at this time you can only reference other Short Text fields here.
+3. Create a Short Text field on a content type and edit its appearance to use the Auto Field Value widget.
+
+## Configuring naming behavior
+
+Naming behavior is composed from an ordered list of fragment strategies in `src/strategies/index.ts`. Edit the `composition` export to add, remove, or reorder fragments, then rebuild and redeploy:
+
+```ts
+export const composition: FieldNameComposition = {
+  fragments: [staticString("Auto Title")],
+  separator: " - ",
+};
+```
+
+A fragment strategy is any function matching the `FragmentStrategy` signature in `src/strategies/types.ts`. It receives the SDK plus an `emit(fragment)` callback, subscribes to whatever it needs, and returns a teardown that removes its listeners. `Field.tsx` joins each fragment's most-recent emitted value with the separator and writes the result to the field (skipping the write when the composed value already matches).
 
 ## Available Scripts
 
