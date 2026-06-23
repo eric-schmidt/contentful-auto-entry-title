@@ -53,16 +53,31 @@ const findScheduledDateForEntry = async (
   return formatPublicationDate(earliest.datetime, earliest.timezone);
 };
 
-// `publicationDate` is server-managed: the editor has no signal that an entry
-// has been added to a scheduled Release (Releases aren't reflected on the
-// entry's own fields, and the schedule isn't on the Release itself), so
-// `subscribe` calls `emit.skip()` and the persisted value is preserved.
-// All real work happens in `compute`, invoked by `releaseDatePropagator` when
-// a Release or ScheduledAction event fires.
+// `publicationDate` runs the same CMA lookup in both `subscribe` (editor
+// session) and `compute` (App Event handler). Releases aren't reflected on
+// the entry's own fields and there's no SDK signal for "this entry was added
+// to a scheduled Release", so the editor has no way to react live to schedule
+// changes — but it can still read the current state on mount, so the editor's
+// emitted value matches the persisted title and other-fragment edits don't
+// strip the date. The handler function performs the same lookup when a
+// Release or ScheduledAction event fires elsewhere.
 export const publicationDate = (): Fragment => ({
-  subscribe: ({ emit }) => {
-    emit.skip();
-    return () => {};
+  subscribe: ({ sdk, emit }) => {
+    let cancelled = false;
+    findScheduledDateForEntry(
+      sdk.cma,
+      sdk.ids.entry,
+      sdk.ids.environmentAlias ?? sdk.ids.environment,
+    )
+      .then((value) => {
+        if (!cancelled) emit(value);
+      })
+      .catch(() => {
+        if (!cancelled) emit("");
+      });
+    return () => {
+      cancelled = true;
+    };
   },
   compute: async ({ entry, cma, environmentId }) =>
     findScheduledDateForEntry(cma, entry.sys.id, environmentId),

@@ -4,7 +4,6 @@ import { SingleLineEditor } from "@contentful/field-editor-single-line";
 import type { FieldAppSDK } from "@contentful/app-sdk";
 import { composition } from "../fragments";
 import { joinFragments } from "../fragments/compose";
-import type { FragmentEmitter } from "../fragments/types";
 
 const Field = () => {
   const sdk = useSDK<FieldAppSDK>();
@@ -15,32 +14,25 @@ const Field = () => {
 
   useEffect(() => {
     const separator = composition.separator ?? "";
-    // `null` slots represent fragments that have called emit.skip() — they're
-    // function-managed and have no editor opinion. While any slot is null,
-    // recompute does NOT write, preserving the server-written value on the
-    // field and avoiding silent overwrites on remount.
-    const fragments: (string | null)[] = composition.fragments.map(() => "");
+    const fragments: string[] = composition.fragments.map(() => "");
 
     const recompute = () => {
-      if (fragments.some((s) => s === null)) return;
-      const next = joinFragments(fragments as string[], separator);
+      const next = joinFragments(fragments, separator);
       const current = sdk.field.getValue();
       if (next !== current) {
         sdk.field.setValue(next);
       }
     };
 
-    const teardowns = composition.fragments.map((fragment, index) => {
-      const emit = ((value: string) => {
-        fragments[index] = value;
-        recompute();
-      }) as FragmentEmitter;
-      emit.skip = () => {
-        fragments[index] = null;
-        recompute();
-      };
-      return fragment.subscribe({ sdk, emit });
-    });
+    const teardowns = composition.fragments.map((fragment, index) =>
+      fragment.subscribe({
+        sdk,
+        emit: (value) => {
+          fragments[index] = value;
+          recompute();
+        },
+      }),
+    );
 
     return () => {
       teardowns.forEach((fn) => fn());
@@ -54,6 +46,7 @@ const Field = () => {
     <SingleLineEditor
       field={sdk.field}
       locales={sdk.locales}
+      isDisabled
     />
   );
 };

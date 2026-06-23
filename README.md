@@ -92,13 +92,24 @@ For the function to read editor interfaces and update entries on parents, the Ap
 
 ## Publication date fragment (Releases & Scheduled Actions)
 
-This is the most architecturally nuanced piece of the app. If you are extending or debugging the publication-date behavior, read this section in full before changing any code in `src/fragments/publicationDate.ts`, `functions/handler/releaseDate.ts`, or the `emit.skip()` plumbing in `src/locations/Field.tsx`.
+This is the most architecturally nuanced piece of the app. If you are extending or debugging the publication-date behavior, read this section in full before changing any code in `src/fragments/publicationDate.ts` or `functions/handler/releaseDate.ts`.
 
-### Why this fragment is server-side only
+### Why this fragment needs both `subscribe` and `compute`
 
-The editor has **no SDK signal** that an entry has been added to a scheduled Launch Release. Releases are not reflected on the entry's own fields, and (as you'll see below) the schedule isn't even on the Release itself. So the editor's `subscribe` path emits nothing meaningful — all scheduling work happens in an App Event handler function.
+The editor has **no SDK signal** that an entry has been added to a scheduled Launch Release. Releases are not reflected on the entry's own fields, and the schedule isn't on the Release itself (it's on a separate ScheduledAction — see below). So the editor cannot react *live* to schedule changes that happen in another tab or by another user.
 
-This also means the editor must not clobber the date the function wrote on a previous run. We solve that with the `emit.skip()` mechanic described below.
+But the editor still needs the date in the title:
+
+- On entry mount, so the title doesn't get stripped of the date when the editor edits the description and triggers a recompute.
+- After a deploy, when the App Event handler hasn't fired (no schedule changed) but a fresh editor session is reading the entry.
+
+To handle this, **`publicationDate.subscribe` runs the same CMA lookup that `compute` runs.** When the editor mounts, the fragment queries `release.query` + `scheduledActions.getMany` once, finds the relevant scheduled date (if any), and emits it. Other fragments emit their values. The composed title matches the persisted title (so the equality guard in `Field.tsx` short-circuits — no write). When the editor edits another field (e.g., description), the `publicationDate` slot still has the date in memory, so the composed write keeps it.
+
+The App Event handler runs the same lookup server-side when a Release or ScheduledAction event fires, propagating updates to closed entries. **Two paths, one lookup helper, one source of truth.**
+
+#### Accepted staleness window
+
+If a Release is scheduled or rescheduled in another tab/session while the editor is open, the editor's `subscribe` already fired with the old (or no) value — the in-memory slot won't update until the entry is reopened. During that window, an editor-side write (e.g., an edit to description) will produce a title without the new date. The App Event handler still fires on the schedule event and corrects the persisted title; reopening the entry shows the corrected value. This is the same staleness window every other cross-entry fragment has.
 
 ### Releases vs. Scheduled Actions: the data model
 
@@ -124,22 +135,9 @@ There are **two separate Contentful entities** at play, and conflating them is t
 
 When a Release is deleted, its ScheduledAction is also deleted, and `ScheduledAction.delete` typically fires while the Release still exists. Our handler iterates the Release's current members at that point and drops the date. If a Release is hard-deleted before that event reaches us, we lose the membership list and cannot reliably clean up — this is an **accepted edge case**. Do **not** "fix" this by subscribing to `Release.delete`: that event fires after the membership list is already gone, so it gives us nothing actionable.
 
-### The `emit.skip()` / function-managed slot mechanic
+### Adding more fragments like this
 
-Strategies fall into two categories:
-
-- **Editor-derivable** fragments (`fieldValue`, `contentType`, `referencedEntryTitle`): the fragment's `subscribe` listens for an editor-side signal and emits a value. The editor is the source of truth for the slot.
-- **Function-managed** fragments (`publicationDate`, and any future fragment that pulls from external systems with no editor-side signal): the function writes the value server-side via `compute`. The editor must respect that persisted value.
-
-If a function-managed fragment's `subscribe` simply emitted `""`, the editor would re-mount, see an empty slot, recompute, and **silently overwrite** the date the function previously wrote.
-
-`emit.skip()` is the explicit signal: "this slot has no opinion right now." `Field.tsx` tracks slots in three states — string-with-value, empty-string, and `null` (skipped). While **any** slot is `null`, `Field.tsx` does not write to the field at all, regardless of what other slots have emitted. The persisted value stays put.
-
-**When to use:** any fragment whose value is determined entirely server-side and the editor has no way to detect changes during the editing session. **When NOT to use:** any fragment where the editor can derive the value live from fields/metadata it can observe.
-
-### The editor's role in this fragment
-
-Practically: zero. The editor reads the persisted title back into the field, and `subscribe` for `publicationDate` calls `emit.skip()`. Edits to other fragments (description, regions) trigger their own emits and `Field.tsx` tries to recompute — but because the publicationDate slot is `null`, no write happens. Only the function ever writes the date. The persisted value is what editors see and what survives across remounts.
+If you add a future fragment whose value comes from outside the entry (e.g., a CMS-external system, a tag/taxonomy lookup, etc.), follow the same pattern: a single helper that takes a CMA client + relevant ids and returns the formatted string, called from both `subscribe` (in the editor session) and `compute` (in the App Event handler). Make sure the editor's `subscribe` returns a teardown that cancels any in-flight async work — `publicationDate` does this with a `cancelled` flag — so a fast unmount/remount doesn't emit stale data into a torn-down slot.
 
 ### Setup
 

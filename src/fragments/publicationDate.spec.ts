@@ -26,17 +26,118 @@ describe("formatPublicationDate", () => {
 
 describe("publicationDate", () => {
   describe("subscribe", () => {
-    it("calls emit.skip() and returns a no-op teardown", () => {
+    const buildSdk = (
+      releases: { items: { sys: { id: string } }[] },
+      scheduled: {
+        items: {
+          scheduledFor: { datetime: string; timezone?: string };
+        }[];
+      },
+      ids: { entry?: string; environment?: string; environmentAlias?: string } = {},
+    ) =>
+      ({
+        ids: {
+          entry: ids.entry ?? "p1",
+          environment: ids.environment ?? "master",
+          environmentAlias: ids.environmentAlias,
+        },
+        cma: {
+          release: { query: vi.fn(async () => releases) },
+          scheduledActions: { getMany: vi.fn(async () => scheduled) },
+        },
+      }) as never;
+
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    it("emits empty string when the entry isn't in any release", async () => {
       const emit = mockEmitter();
       const teardown = publicationDate().subscribe({
-        sdk: {} as never,
+        sdk: buildSdk({ items: [] }, { items: [] }),
         emit,
       });
 
-      expect(emit.skip).toHaveBeenCalledOnce();
-      expect(emit).not.toHaveBeenCalled();
+      await flush();
+
+      expect(emit).toHaveBeenCalledExactlyOnceWith("");
       expect(typeof teardown).toBe("function");
       expect(() => teardown()).not.toThrow();
+    });
+
+    it("emits the formatted date when a scheduled release exists", async () => {
+      const emit = mockEmitter();
+      publicationDate().subscribe({
+        sdk: buildSdk(
+          { items: [{ sys: { id: "rel-1" } }] },
+          {
+            items: [{ scheduledFor: { datetime: "2026-07-04T12:00:00Z" } }],
+          },
+        ),
+        emit,
+      });
+
+      await flush();
+
+      expect(emit).toHaveBeenCalledExactlyOnceWith("Jul-04");
+    });
+
+    it("uses environmentAlias when present, environment otherwise", async () => {
+      const getMany = vi.fn(async () => ({ items: [] }));
+      const sdk = {
+        ids: {
+          entry: "p1",
+          environment: "env-uuid",
+          environmentAlias: "master",
+        },
+        cma: {
+          release: {
+            query: vi.fn(async () => ({ items: [{ sys: { id: "rel-1" } }] })),
+          },
+          scheduledActions: { getMany },
+        },
+      } as never;
+
+      publicationDate().subscribe({ sdk, emit: mockEmitter() });
+
+      await flush();
+
+      expect(getMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: expect.objectContaining({ "environment.sys.id": "master" }),
+        }),
+      );
+    });
+
+    it("does not emit after teardown is called", async () => {
+      const emit = mockEmitter();
+      const teardown = publicationDate().subscribe({
+        sdk: buildSdk({ items: [] }, { items: [] }),
+        emit,
+      });
+      teardown();
+
+      await flush();
+
+      expect(emit).not.toHaveBeenCalled();
+    });
+
+    it("emits empty string when the CMA lookup throws", async () => {
+      const emit = mockEmitter();
+      const sdk = {
+        ids: { entry: "p1", environment: "master" },
+        cma: {
+          release: {
+            query: vi.fn(async () => {
+              throw new Error("boom");
+            }),
+          },
+          scheduledActions: { getMany: vi.fn() },
+        },
+      } as never;
+      publicationDate().subscribe({ sdk, emit });
+
+      await flush();
+
+      expect(emit).toHaveBeenCalledExactlyOnceWith("");
     });
   });
 

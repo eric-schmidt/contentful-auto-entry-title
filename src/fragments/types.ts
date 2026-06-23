@@ -2,14 +2,9 @@ import type { FieldAppSDK } from "@contentful/app-sdk";
 import type { PlainClientAPI } from "contentful-management";
 
 // Fragments emit a string for each value they want included in the joined
-// title. A function-managed fragment (e.g., `publicationDate`) has no editor
-// signal and calls `emit.skip()` instead, marking the slot as "no opinion".
-// `Field.tsx` will not write to the field while any slot is in the skip state,
-// preserving values that were written server-side by the propagator functions.
-export type FragmentEmitter = {
-  (fragment: string): void;
-  skip: () => void;
-};
+// title. Empty strings are filtered out of the join, so emitting "" is the
+// idiomatic way to signal "this slot has nothing to contribute right now."
+export type FragmentEmitter = (fragment: string) => void;
 
 export type FragmentContext = {
   sdk: FieldAppSDK;
