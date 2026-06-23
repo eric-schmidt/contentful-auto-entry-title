@@ -13,20 +13,15 @@ vi.mock("../../src/fragments/compose", () => ({
     fragments.filter((s) => s !== "").join(sep ?? ""),
 }));
 
-import { handler } from "./index";
+import { handleRegionPublish } from "./regionTitle";
 import { composeTitle } from "../../src/fragments/compose";
 
-const PUBLISH_TOPIC = "ContentManagement.Entry.publish";
-
-const buildEvent = (overrides: { topic?: string; contentTypeId?: string; entryId?: string }) => ({
-  headers: { "X-Contentful-Topic": overrides.topic ?? PUBLISH_TOPIC },
-  body: {
-    sys: {
-      id: overrides.entryId ?? "region-1",
-      contentType: { sys: { id: overrides.contentTypeId ?? "region" } },
-    },
-    fields: {},
+const buildSourceEntry = (overrides: { contentTypeId?: string; entryId?: string } = {}) => ({
+  sys: {
+    id: overrides.entryId ?? "region-1",
+    contentType: { sys: { id: overrides.contentTypeId ?? "region" } },
   },
+  fields: {},
 });
 
 const buildParent = (overrides: {
@@ -46,7 +41,7 @@ const buildParent = (overrides: {
     : {},
 });
 
-const buildContext = (
+const buildArgs = (
   parents: ReturnType<typeof buildParent>[],
   editorInterfaces: Record<
     string,
@@ -79,7 +74,7 @@ const buildContext = (
   return { cma, appInstallationId, environmentId: "master", update };
 };
 
-describe("regionTitlePropagator handler", () => {
+describe("handleRegionPublish", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -91,28 +86,26 @@ describe("regionTitlePropagator handler", () => {
     warnSpy.mockRestore();
   });
 
-  it("ignores events that aren't entry.publish", async () => {
-    const ctx = buildContext([], {});
-    await handler(
-      buildEvent({ topic: "ContentManagement.Entry.save" }) as never,
-      ctx as never,
-    );
-    expect(ctx.cma.entry.getMany).not.toHaveBeenCalled();
-  });
-
   it("ignores entries that aren't of type 'region'", async () => {
-    const ctx = buildContext([], {});
-    await handler(
-      buildEvent({ contentTypeId: "blogPost" }) as never,
-      ctx as never,
-    );
-    expect(ctx.cma.entry.getMany).not.toHaveBeenCalled();
+    const args = buildArgs([], {});
+    await handleRegionPublish({
+      cma: args.cma as never,
+      appInstallationId: args.appInstallationId,
+      environmentId: args.environmentId,
+      sourceEntry: buildSourceEntry({ contentTypeId: "blogPost" }) as never,
+    });
+    expect(args.cma.entry.getMany).not.toHaveBeenCalled();
   });
 
   it("does nothing when no parent entries reference the region", async () => {
-    const ctx = buildContext([], {});
-    await handler(buildEvent({}) as never, ctx as never);
-    expect(ctx.update).not.toHaveBeenCalled();
+    const args = buildArgs([], {});
+    await handleRegionPublish({
+      cma: args.cma as never,
+      appInstallationId: args.appInstallationId,
+      environmentId: args.environmentId,
+      sourceEntry: buildSourceEntry() as never,
+    });
+    expect(args.update).not.toHaveBeenCalled();
   });
 
   it("updates only entries whose title field is managed by this app", async () => {
@@ -123,7 +116,7 @@ describe("regionTitlePropagator handler", () => {
       currentTitle: "old",
     });
     const unmanaged = buildParent({ id: "p-unmanaged", contentTypeId: "campaign" });
-    const ctx = buildContext([managed, unmanaged], {
+    const args = buildArgs([managed, unmanaged], {
       blogPost: {
         controls: [
           {
@@ -136,10 +129,15 @@ describe("regionTitlePropagator handler", () => {
       campaign: { controls: [] },
     });
 
-    await handler(buildEvent({}) as never, ctx as never);
+    await handleRegionPublish({
+      cma: args.cma as never,
+      appInstallationId: args.appInstallationId,
+      environmentId: args.environmentId,
+      sourceEntry: buildSourceEntry() as never,
+    });
 
-    expect(ctx.update).toHaveBeenCalledTimes(1);
-    expect(ctx.update).toHaveBeenCalledWith(
+    expect(args.update).toHaveBeenCalledTimes(1);
+    expect(args.update).toHaveBeenCalledWith(
       { entryId: "p-managed" },
       expect.objectContaining({
         fields: expect.objectContaining({
@@ -156,7 +154,7 @@ describe("regionTitlePropagator handler", () => {
       titleFieldId: "internalTitle",
       currentTitle: "EMEA - blogPost",
     });
-    const ctx = buildContext([parent], {
+    const args = buildArgs([parent], {
       blogPost: {
         controls: [
           {
@@ -168,9 +166,14 @@ describe("regionTitlePropagator handler", () => {
       },
     });
 
-    await handler(buildEvent({}) as never, ctx as never);
+    await handleRegionPublish({
+      cma: args.cma as never,
+      appInstallationId: args.appInstallationId,
+      environmentId: args.environmentId,
+      sourceEntry: buildSourceEntry() as never,
+    });
 
-    expect(ctx.update).not.toHaveBeenCalled();
+    expect(args.update).not.toHaveBeenCalled();
   });
 
   it("paginates through links_to_entry results", async () => {
@@ -225,10 +228,12 @@ describe("regionTitlePropagator handler", () => {
       },
     };
 
-    await handler(
-      buildEvent({}) as never,
-      { cma, appInstallationId: "auto-entry-title-app" } as never,
-    );
+    await handleRegionPublish({
+      cma: cma as never,
+      appInstallationId: "auto-entry-title-app",
+      environmentId: "master",
+      sourceEntry: buildSourceEntry() as never,
+    });
 
     expect(cma.entry.getMany).toHaveBeenCalledTimes(2);
     expect(update).toHaveBeenCalledTimes(101);
@@ -274,10 +279,12 @@ describe("regionTitlePropagator handler", () => {
       },
     };
 
-    await handler(
-      buildEvent({}) as never,
-      { cma, appInstallationId: "auto-entry-title-app" } as never,
-    );
+    await handleRegionPublish({
+      cma: cma as never,
+      appInstallationId: "auto-entry-title-app",
+      environmentId: "master",
+      sourceEntry: buildSourceEntry() as never,
+    });
 
     expect(update).toHaveBeenCalledTimes(2);
     expect(warnSpy).toHaveBeenCalled();

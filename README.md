@@ -29,18 +29,24 @@ export const composition: FieldNameComposition = {
 
 A fragment is any object matching the `Fragment` signature in `src/fragments/types.ts`. Its `subscribe` method receives the SDK plus an `emit(fragment)` callback, subscribes to whatever it needs, and returns a teardown that removes its listeners. `Field.tsx` joins each fragment's most-recent emitted value with the separator and writes the result to the field (skipping the write when the composed value already matches).
 
-## Cross-entry rename propagation (App Event Subscription)
+## Server-side title propagation (App Event Subscription)
 
-Some fragments (e.g. `referencedEntryTitle`) derive their value from another entry. When that referenced entry is renamed while the parent entry is **closed**, the parent's auto-generated title would otherwise go stale.
+Some fragments derive their value from data outside the entry itself:
 
-This app ships a Contentful Function — `regionTitlePropagator` (declared in `contentful-app-manifest.json`, source in `functions/regionTitlePropagator/index.ts`) — that handles this case server-side. The function:
+- **`referencedEntryTitle`** — title of a referenced Region. When the Region is renamed while a parent entry is closed, the parent's title would otherwise go stale.
+- **`publicationDate`** — formatted date from the Launch Release the entry is in. The editor has no signal that an entry was added to a scheduled Release, so this fragment is populated entirely server-side.
 
-1. Receives `Entry.publish` events.
-2. Filters to entries of content type `region`.
-3. Uses `links_to_entry` to find every entry that references the published Region.
-4. For each parent whose title field is bound to this app, recomputes the title using the same `composition` the editor uses, and writes the new title to the parent (only if the title actually changed — idempotency guard).
+Both behaviors are handled by a **single Contentful Function** — `autoEntryTitleHandler` (declared in `contentful-app-manifest.json`, source in `functions/handler/index.ts`). A Contentful App Definition supports only **one** App Event handler function, so the function is a thin **dispatcher** that inspects the incoming `X-Contentful-Topic` header and routes to per-domain modules:
 
-The function is **declared** in the manifest and **bundled** by `npm run build`, but it does not run until an **App Event Subscription** is created that points the relevant topic(s) at this function. That subscription is a one-time, per-App-Definition setup. We do this manually via the Contentful web UI rather than scripting it.
+| Topic | Routes to | What it does |
+|---|---|---|
+| `ContentManagement.Entry.publish` | `functions/handler/regionTitle.ts` | If the published entry is a `region`, find every entry that references it via `links_to_entry` and recompute their titles. |
+| `ContentManagement.Release.create` / `.save` | `functions/handler/releaseDate.ts` | Fetch the Release, iterate its entry members, recompute each title (the `publicationDate` fragment will look up the schedule). |
+| `ContentManagement.ScheduledAction.create` / `.save` / `.delete` | `functions/handler/releaseDate.ts` | Same as above, but only when `entity.sys.linkType === "Release"`. Schedule appears, changes, or disappears. |
+
+For each managed parent, the dispatch path: locate the title field bound to this app via the entry's editor interface → recompute via `composeTitle` (the same composition the editor uses) → idempotency-skip if the new title matches the current → otherwise update the entry as a draft.
+
+The function is **declared** in the manifest and **bundled** by `npm run build`, but it does not run until an **App Event Subscription** is created that points the relevant topics at this function. That subscription is a one-time, per-App-Definition setup. We do this manually via the Contentful web UI rather than scripting it.
 
 ### One-time setup
 
@@ -50,26 +56,32 @@ Do this once, after the app has been uploaded and activated for the first time. 
 2. Open **Org Settings → Apps → [the "Auto Entry Title" app definition]**.
 3. Open the **Events** tab.
 4. Click **Create event subscription** (or "Add subscription" — wording varies).
-5. **Topics**: enable `Entry.publish`. Leave other topics off — this app only needs publish events on the source content type.
-6. **Target**: choose **Function**, then select `regionTitlePropagator` as the **App event handler**. Leave the filter and transformation function slots empty.
+5. **Topics**: enable all six —
+   - `Entry.publish`
+   - `Release.create`
+   - `Release.save`
+   - `ScheduledAction.create`
+   - `ScheduledAction.save`
+   - `ScheduledAction.delete`
+6. **Target**: choose **Function**, then select `autoEntryTitleHandler` as the **App event handler**. Leave the filter and transformation function slots empty.
 7. Save the subscription.
 
-There is no content-type filter at the subscription level — the function itself filters incoming events down to `region`-content-type entries, so subscribing to `Entry.publish` for all content types is correct and expected.
+There is no content-type filter at the subscription level — the dispatcher filters `Entry.publish` down to content type `region` and `ScheduledAction.*` down to Release-targeted actions inside the handler itself, so subscribing to all six topics is correct and expected.
 
 ### Verifying the subscription
 
 After saving:
 
-1. In the Events tab, confirm the subscription is listed and shows `Entry.publish` → `regionTitlePropagator` (handler).
-2. In a sandbox space where the app is installed, create a `region` entry titled "EMEA", reference it from a parent entry, and publish the parent. Confirm the parent's title fragment for the region shows "EMEA" (this works without the subscription — it's just the editor's `subscribe` path).
-3. **The propagation test:** close the parent entry. Rename the Region to "Europe" and publish it. Reopen the parent — its title should now reflect "Europe" without the editor having been opened. If it doesn't, check the **Function logs** for `regionTitlePropagator` in the same Events tab — they'll surface the topic that fired and any per-parent errors.
+1. In the Events tab, confirm the subscription is listed with all six topics → `autoEntryTitleHandler` as the handler.
+2. **Region rename test:** in a sandbox space, create a `region` entry titled "EMEA", reference it from a parent entry. Confirm the parent's title fragment for the region shows "EMEA" (editor `subscribe` path, no function involvement). Close the parent. Rename the Region to "Europe" and publish it. Reopen the parent — its title should now reflect "Europe".
+3. **Release schedule test:** create a Launch Release containing a managed entry, schedule it for some date. After the function runs, the entry's title should show the date prefix (e.g. `Jul-04 - …`). Reschedule, then unschedule — the title should update to the new date, then drop the date entirely.
+4. If either test fails, check the **Function logs** for `autoEntryTitleHandler` in the same Events tab — they'll surface the topic that fired and any per-parent errors.
 
 ### Re-running / changing the subscription
 
 The subscription persists at the App Definition level — redeploys of the function bundle do **not** require re-creating it. You only need to revisit this UI when:
 
 - You change which topics the function should accept (e.g., add `Entry.unpublish` later).
-- You add a new function that needs its own subscription.
 - The subscription was accidentally deleted.
 
 Editing the existing subscription in place is supported — toggle topics, change the target function, save.
@@ -80,7 +92,7 @@ For the function to read editor interfaces and update entries on parents, the Ap
 
 ## Publication date fragment (Releases & Scheduled Actions)
 
-This is the most architecturally nuanced piece of the app. If you are extending or debugging the publication-date behavior, read this section in full before changing any code in `src/fragments/publicationDate.ts`, `functions/releaseDatePropagator/`, or the `emit.skip()` plumbing in `src/locations/Field.tsx`.
+This is the most architecturally nuanced piece of the app. If you are extending or debugging the publication-date behavior, read this section in full before changing any code in `src/fragments/publicationDate.ts`, `functions/handler/releaseDate.ts`, or the `emit.skip()` plumbing in `src/locations/Field.tsx`.
 
 ### Why this fragment is server-side only
 
@@ -129,20 +141,9 @@ If a function-managed fragment's `subscribe` simply emitted `""`, the editor wou
 
 Practically: zero. The editor reads the persisted title back into the field, and `subscribe` for `publicationDate` calls `emit.skip()`. Edits to other fragments (description, regions) trigger their own emits and `Field.tsx` tries to recompute — but because the publicationDate slot is `null`, no write happens. Only the function ever writes the date. The persisted value is what editors see and what survives across remounts.
 
-### Setup: the second App Event Subscription
+### Setup
 
-Add this **in addition to** the Region rename subscription documented above. Both live on the same App Definition.
-
-1. In the Contentful web app, open **Org Settings → Apps → [the "Auto Entry Title" app definition] → Events**.
-2. Click **Create event subscription**.
-3. **Topics:** enable all five —
-   - `Release.create`
-   - `Release.save`
-   - `ScheduledAction.create`
-   - `ScheduledAction.save`
-   - `ScheduledAction.delete`
-4. **Target:** Function → `releaseDatePropagator` as the **App event handler**. Leave filter and transformation slots empty.
-5. Save.
+Subscription wiring is documented above in **"Server-side title propagation (App Event Subscription)"** — a single subscription on `autoEntryTitleHandler` covers both Region renames and Release schedule events. The five Release/ScheduledAction topics in this section are part of that single subscription's topic list.
 
 ### Date format and timezone
 
@@ -152,20 +153,21 @@ This is documented because timezone semantics for "what calendar date is this sc
 
 ### Recursion safety
 
-The function will not loop:
+The function will not loop on Release schedule events:
 
-- It only subscribes to `Release.*` and `ScheduledAction.*` topics, not `Entry.*`.
-- Entry updates via `cma.entry.update` produce `Entry.save`, **not** `Release.save` or `ScheduledAction.*`.
+- The dispatcher only routes `Release.*` and `ScheduledAction.*` topics into the schedule handler. Entry updates via `cma.entry.update` produce `Entry.save`, not `Release.save` or `ScheduledAction.*`, so writes from the schedule handler do not feed back into it.
+- The dispatcher's `Entry.publish` route is gated on content type `region`. Title rewrites on managed parents produce `Entry.save` (not `Entry.publish`), and even if they did publish, they wouldn't be of type `region`.
 - The idempotency guard (skip the CMA write when the new title matches the current) prevents redundant writes even if the same event re-fires.
 
 ### Shared utilities
 
-Both propagator functions use:
+The dispatcher and its per-domain modules use:
 
 - `functions/shared/findManagedTitleFieldId.ts` — locates the title field on a parent entry's editor interface that is bound to this app, returning `null` for unmanaged content types. Also exports `resolveDefaultLocale`.
-- `src/fragments/compose.ts` — `composeTitle` is the single source of truth for "what should this entry's title be right now." Future propagators should import from these rather than reimplement the logic.
+- `functions/shared/recomputeTitleForEntries.ts` — the per-parent loop: locate the managed title field, recompute via `composeTitle`, idempotency-skip, write as a draft. Both `regionTitle.ts` and `releaseDate.ts` end with a call to this helper.
+- `src/fragments/compose.ts` — `composeTitle` is the single source of truth for "what should this entry's title be right now."
 
-If you add a new propagator function, follow the same shape: filter the topic, resolve which entries are affected, then for each entry call `findManagedTitleFieldId` to scope to managed entries and `composeTitle` to compute the new value. The idempotency guard and the per-parent try/catch are part of the contract — don't skip them.
+If you add a new dispatch route, follow the same shape: identify the affected entries, then call `recomputeTitleForEntries` with the list. Don't reimplement the per-parent loop or skip the idempotency guard — they're part of the contract.
 
 ## Available Scripts
 

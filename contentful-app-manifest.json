@@ -3,20 +3,11 @@
   "name": "Auto Entry Title",
   "functions": [
     {
-      "id": "regionTitlePropagator",
-      "name": "Region title propagator",
-      "description": "Recomputes parent entry titles when a referenced Region is renamed.",
-      "path": "build/functions/regionTitlePropagator/index.js",
-      "entryFile": "functions/regionTitlePropagator/index.ts",
-      "accepts": ["appevent.handler"],
-      "allowNetworks": []
-    },
-    {
-      "id": "releaseDatePropagator",
-      "name": "Release date propagator",
-      "description": "Updates entry titles when a Launch Release is created/saved or its scheduled publish date is created/changed/canceled.",
-      "path": "build/functions/releaseDatePropagator/index.js",
-      "entryFile": "functions/releaseDatePropagator/index.ts",
+      "id": "autoEntryTitleHandler",
+      "name": "Auto entry title handler",
+      "description": "Single dispatcher for the auto-entry-title app. Handles Entry.publish events for Region renames and Release.* / ScheduledAction.* events for Launch Release schedule changes.",
+      "path": "functions/handler/index.js",
+      "entryFile": "functions/handler/index.ts",
       "accepts": ["appevent.handler"],
       "allowNetworks": []
     }

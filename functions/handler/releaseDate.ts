@@ -1,10 +1,6 @@
 import type { EntryProps, PlainClientAPI, ReleaseProps } from "contentful-management";
-import { composition } from "../../src/fragments";
-import { composeTitle } from "../../src/fragments/compose";
-import {
-  findManagedTitleFieldId,
-  resolveDefaultLocale,
-} from "../shared/findManagedTitleFieldId";
+import { resolveDefaultLocale } from "../shared/findManagedTitleFieldId";
+import { recomputeTitleForEntries } from "../shared/recomputeTitleForEntries";
 
 const RELEASE_TOPIC_PREFIX = "ContentManagement.Release.";
 const SCHEDULED_ACTION_TOPIC_PREFIX = "ContentManagement.ScheduledAction.";
@@ -14,18 +10,18 @@ type ScheduledActionEventBody = {
   entity: { sys: { id: string; linkType: string } };
 };
 
-type AppEvent = {
-  headers: Record<string, string>;
-  body: ReleaseProps | ScheduledActionEventBody;
-};
-
-type FunctionContext = {
+type Args = {
   cma: PlainClientAPI;
   appInstallationId: string;
   environmentId: string;
+  topic: string;
+  body: ReleaseProps | ScheduledActionEventBody;
 };
 
-const resolveReleaseId = (topic: string, body: AppEvent["body"]): string | null => {
+const resolveReleaseId = (
+  topic: string,
+  body: Args["body"],
+): string | null => {
   if (topic.startsWith(RELEASE_TOPIC_PREFIX)) {
     return body.sys.id;
   }
@@ -51,12 +47,19 @@ const safeReleaseGet = async (
   }
 };
 
-export const handler = async (event: AppEvent, context: FunctionContext): Promise<void> => {
-  const topic = event.headers["X-Contentful-Topic"] ?? "";
-  const releaseId = resolveReleaseId(topic, event.body);
+// Handles Release.* and ScheduledAction.* events. For ScheduledAction events
+// whose target isn't a Release, this is a no-op. For everything else, fetches
+// the affected Release and recomputes the title of each entry member.
+export const handleReleaseOrScheduledActionEvent = async ({
+  cma,
+  appInstallationId,
+  environmentId,
+  topic,
+  body,
+}: Args): Promise<void> => {
+  const releaseId = resolveReleaseId(topic, body);
   if (!releaseId) return;
 
-  const { cma, appInstallationId, environmentId } = context;
   const release = await safeReleaseGet(cma, releaseId);
   if (!release) return;
 
@@ -67,34 +70,25 @@ export const handler = async (event: AppEvent, context: FunctionContext): Promis
 
   const defaultLocale = await resolveDefaultLocale(cma);
 
+  // Hydrate each linked entry into a full EntryProps before recomputing.
+  const entries: EntryProps[] = [];
   for (const link of entryLinks) {
     try {
-      const parent: EntryProps = await cma.entry.get({ entryId: link.sys.id });
-      const titleFieldId = await findManagedTitleFieldId(cma, parent, appInstallationId);
-      if (!titleFieldId) continue;
-
-      const newTitle = await composeTitle(composition, {
-        entry: parent,
-        cma,
-        defaultLocale,
-        environmentId,
-      });
-      const currentTitle = parent.fields[titleFieldId]?.[defaultLocale];
-      if (newTitle === currentTitle) continue;
-
-      parent.fields[titleFieldId] = {
-        ...(parent.fields[titleFieldId] ?? {}),
-        [defaultLocale]: newTitle,
-      };
-
-      await cma.entry.update({ entryId: parent.sys.id }, parent);
+      entries.push(await cma.entry.get({ entryId: link.sys.id }));
     } catch (err) {
       console.warn(
-        `[auto-entry-title] failed to propagate release date for entry "${link.sys.id}".`,
+        `[auto-entry-title] releaseDate: failed to fetch release member "${link.sys.id}".`,
         err,
       );
     }
   }
-};
 
-export default handler;
+  await recomputeTitleForEntries({
+    cma,
+    appInstallationId,
+    environmentId,
+    defaultLocale,
+    entries,
+    context: "releaseDate",
+  });
+};

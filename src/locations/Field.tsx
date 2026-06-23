@@ -54,8 +54,6 @@ const Field = () => {
     <SingleLineEditor
       field={sdk.field}
       locales={sdk.locales}
-      isInitiallyDisabled={true}
-      isDisabled
     />
   );
 };

@@ -13,33 +13,23 @@ vi.mock("../../src/fragments/compose", () => ({
     fragments.filter((s) => s !== "").join(sep ?? ""),
 }));
 
-import { handler } from "./index";
+import { handleReleaseOrScheduledActionEvent } from "./releaseDate";
 import { composeTitle } from "../../src/fragments/compose";
 
 const RELEASE_SAVE = "ContentManagement.Release.save";
 const SCHEDULED_ACTION_CREATE = "ContentManagement.ScheduledAction.create";
 const SCHEDULED_ACTION_DELETE = "ContentManagement.ScheduledAction.delete";
 
-const buildReleaseEvent = (overrides: { topic?: string; releaseId?: string } = {}) => ({
-  headers: { "X-Contentful-Topic": overrides.topic ?? RELEASE_SAVE },
-  body: {
-    sys: { id: overrides.releaseId ?? "rel-1", type: "Release" },
-    entities: { items: [] },
-  } as never,
+const buildReleaseBody = (releaseId = "rel-1") => ({
+  sys: { id: releaseId, type: "Release" as const },
+  entities: { items: [] as { sys: { id: string; linkType: string } }[] },
 });
 
-const buildScheduledActionEvent = (overrides: {
-  topic?: string;
-  releaseId?: string;
-  linkType?: string;
-}) => ({
-  headers: { "X-Contentful-Topic": overrides.topic ?? SCHEDULED_ACTION_CREATE },
-  body: {
-    sys: { id: "sa-1", type: "ScheduledAction" },
-    entity: {
-      sys: { id: overrides.releaseId ?? "rel-1", linkType: overrides.linkType ?? "Release" },
-    },
-  } as never,
+const buildScheduledActionBody = (overrides: { releaseId?: string; linkType?: string }) => ({
+  sys: { id: "sa-1", type: "ScheduledAction" as const },
+  entity: {
+    sys: { id: overrides.releaseId ?? "rel-1", linkType: overrides.linkType ?? "Release" },
+  },
 });
 
 const buildParent = (overrides: {
@@ -59,7 +49,7 @@ const buildParent = (overrides: {
     : {},
 });
 
-const buildContext = (overrides: {
+const buildArgs = (overrides: {
   release?: { entities?: { items?: { sys: { id: string; linkType: string } }[] } } | null;
   parents?: ReturnType<typeof buildParent>[];
   editorInterfaces?: Record<
@@ -105,7 +95,7 @@ const buildContext = (overrides: {
   };
 };
 
-describe("releaseDatePropagator handler", () => {
+describe("handleReleaseOrScheduledActionEvent", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -119,36 +109,39 @@ describe("releaseDatePropagator handler", () => {
   });
 
   it("ignores ScheduledAction events whose target isn't a Release", async () => {
-    const ctx = buildContext({});
-    await handler(
-      buildScheduledActionEvent({ linkType: "Entry" }) as never,
-      ctx as never,
-    );
-    expect(ctx.releaseGet).not.toHaveBeenCalled();
-  });
-
-  it("ignores topics outside Release.* and ScheduledAction.*", async () => {
-    const ctx = buildContext({});
-    await handler(
-      {
-        headers: { "X-Contentful-Topic": "ContentManagement.Entry.publish" },
-        body: { sys: { id: "x", type: "Entry" } } as never,
-      } as never,
-      ctx as never,
-    );
-    expect(ctx.releaseGet).not.toHaveBeenCalled();
+    const args = buildArgs({});
+    await handleReleaseOrScheduledActionEvent({
+      cma: args.cma as never,
+      appInstallationId: args.appInstallationId,
+      environmentId: args.environmentId,
+      topic: SCHEDULED_ACTION_CREATE,
+      body: buildScheduledActionBody({ linkType: "Entry" }) as never,
+    });
+    expect(args.releaseGet).not.toHaveBeenCalled();
   });
 
   it("exits cleanly when the Release is no longer findable", async () => {
-    const ctx = buildContext({ release: null });
-    await handler(buildReleaseEvent() as never, ctx as never);
-    expect(ctx.update).not.toHaveBeenCalled();
+    const args = buildArgs({ release: null });
+    await handleReleaseOrScheduledActionEvent({
+      cma: args.cma as never,
+      appInstallationId: args.appInstallationId,
+      environmentId: args.environmentId,
+      topic: RELEASE_SAVE,
+      body: buildReleaseBody() as never,
+    });
+    expect(args.update).not.toHaveBeenCalled();
   });
 
   it("does no work when the Release has no entry members", async () => {
-    const ctx = buildContext({ release: { entities: { items: [] } } });
-    await handler(buildReleaseEvent() as never, ctx as never);
-    expect(ctx.update).not.toHaveBeenCalled();
+    const args = buildArgs({ release: { entities: { items: [] } } });
+    await handleReleaseOrScheduledActionEvent({
+      cma: args.cma as never,
+      appInstallationId: args.appInstallationId,
+      environmentId: args.environmentId,
+      topic: RELEASE_SAVE,
+      body: buildReleaseBody() as never,
+    });
+    expect(args.update).not.toHaveBeenCalled();
   });
 
   it("updates only entries whose title field is managed by this app", async () => {
@@ -162,7 +155,7 @@ describe("releaseDatePropagator handler", () => {
       id: "p-unmanaged",
       contentTypeId: "campaign",
     });
-    const ctx = buildContext({
+    const args = buildArgs({
       release: {
         entities: {
           items: [
@@ -186,10 +179,16 @@ describe("releaseDatePropagator handler", () => {
       },
     });
 
-    await handler(buildReleaseEvent() as never, ctx as never);
+    await handleReleaseOrScheduledActionEvent({
+      cma: args.cma as never,
+      appInstallationId: args.appInstallationId,
+      environmentId: args.environmentId,
+      topic: RELEASE_SAVE,
+      body: buildReleaseBody() as never,
+    });
 
-    expect(ctx.update).toHaveBeenCalledTimes(1);
-    expect(ctx.update).toHaveBeenCalledWith(
+    expect(args.update).toHaveBeenCalledTimes(1);
+    expect(args.update).toHaveBeenCalledWith(
       { entryId: "p-managed" },
       expect.objectContaining({
         fields: expect.objectContaining({
@@ -199,7 +198,7 @@ describe("releaseDatePropagator handler", () => {
     );
   });
 
-  it("recomputes via composeTitle for ScheduledAction.delete (date drops)", async () => {
+  it("recomputes for ScheduledAction.delete so the date drops", async () => {
     vi.mocked(composeTitle).mockResolvedValueOnce("Brand - composed"); // no date
     const parent = buildParent({
       id: "p1",
@@ -207,7 +206,7 @@ describe("releaseDatePropagator handler", () => {
       titleFieldId: "internalTitle",
       currentTitle: "Jul-04 - Brand - composed",
     });
-    const ctx = buildContext({
+    const args = buildArgs({
       release: {
         entities: { items: [{ sys: { id: "p1", linkType: "Entry" } }] },
       },
@@ -225,12 +224,15 @@ describe("releaseDatePropagator handler", () => {
       },
     });
 
-    await handler(
-      buildScheduledActionEvent({ topic: SCHEDULED_ACTION_DELETE }) as never,
-      ctx as never,
-    );
+    await handleReleaseOrScheduledActionEvent({
+      cma: args.cma as never,
+      appInstallationId: args.appInstallationId,
+      environmentId: args.environmentId,
+      topic: SCHEDULED_ACTION_DELETE,
+      body: buildScheduledActionBody({}) as never,
+    });
 
-    expect(ctx.update).toHaveBeenCalledWith(
+    expect(args.update).toHaveBeenCalledWith(
       { entryId: "p1" },
       expect.objectContaining({
         fields: expect.objectContaining({
@@ -248,7 +250,7 @@ describe("releaseDatePropagator handler", () => {
       titleFieldId: "internalTitle",
       currentTitle: "Jul-04 - composed",
     });
-    const ctx = buildContext({
+    const args = buildArgs({
       release: {
         entities: { items: [{ sys: { id: "p1", linkType: "Entry" } }] },
       },
@@ -266,9 +268,15 @@ describe("releaseDatePropagator handler", () => {
       },
     });
 
-    await handler(buildReleaseEvent() as never, ctx as never);
+    await handleReleaseOrScheduledActionEvent({
+      cma: args.cma as never,
+      appInstallationId: args.appInstallationId,
+      environmentId: args.environmentId,
+      topic: RELEASE_SAVE,
+      body: buildReleaseBody() as never,
+    });
 
-    expect(ctx.update).not.toHaveBeenCalled();
+    expect(args.update).not.toHaveBeenCalled();
   });
 
   it("continues processing other parents when one parent fails", async () => {
@@ -276,7 +284,7 @@ describe("releaseDatePropagator handler", () => {
       .fn()
       .mockRejectedValueOnce(new Error("conflict"))
       .mockResolvedValueOnce({});
-    const ctx = buildContext({
+    const args = buildArgs({
       release: {
         entities: {
           items: [
@@ -311,9 +319,15 @@ describe("releaseDatePropagator handler", () => {
         },
       },
     });
-    ctx.cma.entry.update = update;
+    args.cma.entry.update = update;
 
-    await handler(buildReleaseEvent() as never, ctx as never);
+    await handleReleaseOrScheduledActionEvent({
+      cma: args.cma as never,
+      appInstallationId: args.appInstallationId,
+      environmentId: args.environmentId,
+      topic: RELEASE_SAVE,
+      body: buildReleaseBody() as never,
+    });
 
     expect(update).toHaveBeenCalledTimes(2);
     expect(warnSpy).toHaveBeenCalled();
