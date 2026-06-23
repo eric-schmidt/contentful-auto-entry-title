@@ -2,9 +2,9 @@ import { useEffect } from "react";
 import { useSDK } from "@contentful/react-apps-toolkit";
 import { SingleLineEditor } from "@contentful/field-editor-single-line";
 import type { FieldAppSDK } from "@contentful/app-sdk";
-import { composition } from "../strategies";
-import { joinFragments } from "../strategies/compose";
-import type { FragmentEmitter } from "../strategies/types";
+import { composition } from "../fragments";
+import { joinFragments } from "../fragments/compose";
+import type { FragmentEmitter } from "../fragments/types";
 
 const Field = () => {
   const sdk = useSDK<FieldAppSDK>();
@@ -15,7 +15,7 @@ const Field = () => {
 
   useEffect(() => {
     const separator = composition.separator ?? "";
-    // `null` slots represent strategies that have called emit.skip() — they're
+    // `null` slots represent fragments that have called emit.skip() — they're
     // function-managed and have no editor opinion. While any slot is null,
     // recompute does NOT write, preserving the server-written value on the
     // field and avoiding silent overwrites on remount.
@@ -30,7 +30,7 @@ const Field = () => {
       }
     };
 
-    const teardowns = composition.fragments.map((strategy, index) => {
+    const teardowns = composition.fragments.map((fragment, index) => {
       const emit = ((value: string) => {
         fragments[index] = value;
         recompute();
@@ -39,7 +39,7 @@ const Field = () => {
         fragments[index] = null;
         recompute();
       };
-      return strategy.subscribe({ sdk, emit });
+      return fragment.subscribe({ sdk, emit });
     });
 
     return () => {

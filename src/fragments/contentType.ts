@@ -1,6 +1,6 @@
-import type { FragmentStrategy } from "./types";
+import type { Fragment } from "./types";
 
-export const contentType = (): FragmentStrategy => ({
+export const contentType = (): Fragment => ({
   subscribe: ({ sdk, emit }) => {
     emit(sdk.contentType.name ?? sdk.contentType.sys.id);
     return () => {};

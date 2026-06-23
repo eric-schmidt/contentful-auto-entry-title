@@ -2,7 +2,7 @@ This project was bootstrapped with [Create Contentful App](https://github.com/co
 
 ## Overview
 
-The main goal of this app is to automatically generate the value of an entry's title field by composing an ordered list of fragment strategies — small modules that each contribute one piece of the final string (e.g., a value pulled from another field, a Launch Release scheduled date, a fixed prefix). Fragments are concatenated with a configurable separator and written to the field on which the app is mounted.
+The main goal of this app is to automatically generate the value of an entry's title field by composing an ordered list of fragments — small modules that each contribute one piece of the final string (e.g., a value pulled from another field, a Launch Release scheduled date, a fixed prefix). Fragments are concatenated with a configurable separator and written to the field on which the app is mounted.
 
 This app is intended for non-localized entry-title fields. The composed value is written via `sdk.field.setValue`, which targets the locale of the mounted field.
 
@@ -18,7 +18,7 @@ This app uses https://github.com/contentful/actions-app-deploy to automatically 
 
 ## Configuring naming behavior
 
-Naming behavior is composed from an ordered list of fragment strategies in `src/strategies/index.ts`. Edit the `composition` export to add, remove, or reorder fragments, then rebuild and redeploy:
+Naming behavior is composed from an ordered list of fragments in `src/fragments/index.ts`. Edit the `composition` export to add, remove, or reorder fragments, then rebuild and redeploy:
 
 ```ts
 export const composition: FieldNameComposition = {
@@ -27,11 +27,11 @@ export const composition: FieldNameComposition = {
 };
 ```
 
-A fragment strategy is any function matching the `FragmentStrategy` signature in `src/strategies/types.ts`. It receives the SDK plus an `emit(fragment)` callback, subscribes to whatever it needs, and returns a teardown that removes its listeners. `Field.tsx` joins each fragment's most-recent emitted value with the separator and writes the result to the field (skipping the write when the composed value already matches).
+A fragment is any object matching the `Fragment` signature in `src/fragments/types.ts`. Its `subscribe` method receives the SDK plus an `emit(fragment)` callback, subscribes to whatever it needs, and returns a teardown that removes its listeners. `Field.tsx` joins each fragment's most-recent emitted value with the separator and writes the result to the field (skipping the write when the composed value already matches).
 
 ## Cross-entry rename propagation (App Event Subscription)
 
-Some fragment strategies (e.g. `referencedEntryTitle`) derive their value from another entry. When that referenced entry is renamed while the parent entry is **closed**, the parent's auto-generated title would otherwise go stale.
+Some fragments (e.g. `referencedEntryTitle`) derive their value from another entry. When that referenced entry is renamed while the parent entry is **closed**, the parent's auto-generated title would otherwise go stale.
 
 This app ships a Contentful Function — `regionTitlePropagator` (declared in `contentful-app-manifest.json`, source in `functions/regionTitlePropagator/index.ts`) — that handles this case server-side. The function:
 
@@ -80,7 +80,7 @@ For the function to read editor interfaces and update entries on parents, the Ap
 
 ## Publication date fragment (Releases & Scheduled Actions)
 
-This is the most architecturally nuanced piece of the app. If you are extending or debugging the publication-date behavior, read this section in full before changing any code in `src/strategies/publicationDate.ts`, `functions/releaseDatePropagator/`, or the `emit.skip()` plumbing in `src/locations/Field.tsx`.
+This is the most architecturally nuanced piece of the app. If you are extending or debugging the publication-date behavior, read this section in full before changing any code in `src/fragments/publicationDate.ts`, `functions/releaseDatePropagator/`, or the `emit.skip()` plumbing in `src/locations/Field.tsx`.
 
 ### Why this fragment is server-side only
 
@@ -116,14 +116,14 @@ When a Release is deleted, its ScheduledAction is also deleted, and `ScheduledAc
 
 Strategies fall into two categories:
 
-- **Editor-derivable** strategies (`fieldValue`, `contentType`, `referencedEntryTitle`): the strategy's `subscribe` listens for an editor-side signal and emits a value. The editor is the source of truth for the slot.
-- **Function-managed** strategies (`publicationDate`, and any future strategy that pulls from external systems with no editor-side signal): the function writes the value server-side via `compute`. The editor must respect that persisted value.
+- **Editor-derivable** fragments (`fieldValue`, `contentType`, `referencedEntryTitle`): the fragment's `subscribe` listens for an editor-side signal and emits a value. The editor is the source of truth for the slot.
+- **Function-managed** fragments (`publicationDate`, and any future fragment that pulls from external systems with no editor-side signal): the function writes the value server-side via `compute`. The editor must respect that persisted value.
 
-If a function-managed strategy's `subscribe` simply emitted `""`, the editor would re-mount, see an empty slot, recompute, and **silently overwrite** the date the function previously wrote.
+If a function-managed fragment's `subscribe` simply emitted `""`, the editor would re-mount, see an empty slot, recompute, and **silently overwrite** the date the function previously wrote.
 
 `emit.skip()` is the explicit signal: "this slot has no opinion right now." `Field.tsx` tracks slots in three states — string-with-value, empty-string, and `null` (skipped). While **any** slot is `null`, `Field.tsx` does not write to the field at all, regardless of what other slots have emitted. The persisted value stays put.
 
-**When to use:** any strategy whose value is determined entirely server-side and the editor has no way to detect changes during the editing session. **When NOT to use:** any strategy where the editor can derive the value live from fields/metadata it can observe.
+**When to use:** any fragment whose value is determined entirely server-side and the editor has no way to detect changes during the editing session. **When NOT to use:** any fragment where the editor can derive the value live from fields/metadata it can observe.
 
 ### The editor's role in this fragment
 
@@ -163,7 +163,7 @@ The function will not loop:
 Both propagator functions use:
 
 - `functions/shared/findManagedTitleFieldId.ts` — locates the title field on a parent entry's editor interface that is bound to this app, returning `null` for unmanaged content types. Also exports `resolveDefaultLocale`.
-- `src/strategies/compose.ts` — `composeTitle` is the single source of truth for "what should this entry's title be right now." Future propagators should import from these rather than reimplement the logic.
+- `src/fragments/compose.ts` — `composeTitle` is the single source of truth for "what should this entry's title be right now." Future propagators should import from these rather than reimplement the logic.
 
 If you add a new propagator function, follow the same shape: filter the topic, resolve which entries are affected, then for each entry call `findManagedTitleFieldId` to scope to managed entries and `composeTitle` to compute the new value. The idempotency guard and the per-parent try/catch are part of the contract — don't skip them.
 

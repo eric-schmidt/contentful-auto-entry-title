@@ -1,6 +1,6 @@
 import type { EntryProps, PlainClientAPI, ReleaseProps } from "contentful-management";
-import { composition } from "../../src/strategies";
-import { composeTitle } from "../../src/strategies/compose";
+import { composition } from "../../src/fragments";
+import { composeTitle } from "../../src/fragments/compose";
 import {
   findManagedTitleFieldId,
   resolveDefaultLocale,

@@ -1,9 +1,9 @@
 import Field from "./Field";
 import { render, screen } from "@testing-library/react";
 import { vi, describe, it, expect, beforeEach } from "vitest";
-import type { FragmentEmitter, FragmentStrategy } from "../strategies/types";
+import type { FragmentEmitter, Fragment } from "../fragments/types";
 
-vi.mock("../strategies", () => {
+vi.mock("../fragments", () => {
   const noopEmitter = (): FragmentEmitter => {
     const fn = (() => {}) as unknown as FragmentEmitter;
     fn.skip = () => {};
@@ -20,14 +20,14 @@ vi.mock("../strategies", () => {
     emitB: noopEmitter(),
   };
 
-  const fragmentA: FragmentStrategy = {
+  const fragmentA: Fragment = {
     subscribe: ({ emit }) => {
       refs.emitA = emit;
       return teardownA;
     },
     compute: async () => "",
   };
-  const fragmentB: FragmentStrategy = {
+  const fragmentB: Fragment = {
     subscribe: ({ emit }) => {
       refs.emitB = emit;
       return teardownB;
@@ -47,9 +47,9 @@ vi.mock("../strategies", () => {
   };
 });
 
-import * as strategiesModule from "../strategies";
+import * as fragmentsModule from "../fragments";
 
-const mocked = strategiesModule as unknown as {
+const mocked = fragmentsModule as unknown as {
   __testRefs: { emitA: FragmentEmitter; emitB: FragmentEmitter };
   __teardownA: ReturnType<typeof vi.fn>;
   __teardownB: ReturnType<typeof vi.fn>;

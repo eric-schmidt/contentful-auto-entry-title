@@ -1,20 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("../../src/strategies", () => ({
+vi.mock("../../src/fragments", () => ({
   composition: {
     fragments: [],
     separator: " - ",
   },
 }));
 
-vi.mock("../../src/strategies/compose", () => ({
+vi.mock("../../src/fragments/compose", () => ({
   composeTitle: vi.fn(async () => "EMEA - blogPost"),
   joinFragments: (fragments: string[], sep?: string) =>
     fragments.filter((s) => s !== "").join(sep ?? ""),
 }));
 
 import { handler } from "./index";
-import { composeTitle } from "../../src/strategies/compose";
+import { composeTitle } from "../../src/fragments/compose";
 
 const PUBLISH_TOPIC = "ContentManagement.Entry.publish";
 

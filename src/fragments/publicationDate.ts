@@ -1,4 +1,4 @@
-import type { FragmentCmaClient, FragmentStrategy } from "./types";
+import type { FragmentCmaClient, Fragment } from "./types";
 
 // Formats an ISO 8601 instant as `Mon-DD` in the supplied IANA timezone (or UTC
 // if none). Uses Intl.DateTimeFormat with locale "en-US" so the month
@@ -59,7 +59,7 @@ const findScheduledDateForEntry = async (
 // `subscribe` calls `emit.skip()` and the persisted value is preserved.
 // All real work happens in `compute`, invoked by `releaseDatePropagator` when
 // a Release or ScheduledAction event fires.
-export const publicationDate = (): FragmentStrategy => ({
+export const publicationDate = (): Fragment => ({
   subscribe: ({ emit }) => {
     emit.skip();
     return () => {};

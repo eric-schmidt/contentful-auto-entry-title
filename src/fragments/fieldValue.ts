@@ -1,4 +1,4 @@
-import type { FragmentStrategy } from "./types";
+import type { Fragment } from "./types";
 
 type FieldValueOptions = {
   fieldId: string;
@@ -7,12 +7,12 @@ type FieldValueOptions = {
 const coerce = (value: unknown): string =>
   typeof value === "string" ? value : "";
 
-export const fieldValue = ({ fieldId }: FieldValueOptions): FragmentStrategy => ({
+export const fieldValue = ({ fieldId }: FieldValueOptions): Fragment => ({
   subscribe: ({ sdk, emit }) => {
     const field = sdk.entry.fields[fieldId];
     if (!field) {
       console.warn(
-        `[auto-entry-title] fieldValue strategy: no field with id "${fieldId}" on this content type.`,
+        `[auto-entry-title] fieldValue fragment: no field with id "${fieldId}" on this content type.`,
       );
       return () => {};
     }

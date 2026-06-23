@@ -1,8 +1,8 @@
 import type { FieldAppSDK } from "@contentful/app-sdk";
 import type { PlainClientAPI } from "contentful-management";
 
-// Strategies emit a string for each value they want included in the joined
-// title. A function-managed strategy (e.g., `publicationDate`) has no editor
+// Fragments emit a string for each value they want included in the joined
+// title. A function-managed fragment (e.g., `publicationDate`) has no editor
 // signal and calls `emit.skip()` instead, marking the slot as "no opinion".
 // `Field.tsx` will not write to the field while any slot is in the skip state,
 // preserving values that were written server-side by the propagator functions.
@@ -11,7 +11,7 @@ export type FragmentEmitter = {
   skip: () => void;
 };
 
-export type FragmentStrategyContext = {
+export type FragmentContext = {
   sdk: FieldAppSDK;
   emit: FragmentEmitter;
 };
@@ -25,7 +25,7 @@ export type FragmentComputeEntry = {
 };
 
 // Structural subset of contentful-management's PlainClientAPI covering only the
-// methods the strategies and the propagator function actually call. Both
+// methods the fragments and the propagator function actually call. Both
 // `sdk.cma` (App SDK CMAClient) and a fresh `createClient({ type: "plain" })`
 // satisfy this shape, so the same compute paths work in the editor and the
 // Function.
@@ -43,12 +43,12 @@ export type FragmentComputeContext = {
   environmentId: string;
 };
 
-export type FragmentStrategy = {
-  subscribe: (ctx: FragmentStrategyContext) => () => void;
+export type Fragment = {
+  subscribe: (ctx: FragmentContext) => () => void;
   compute: (ctx: FragmentComputeContext) => Promise<string>;
 };
 
 export type FieldNameComposition = {
-  fragments: FragmentStrategy[];
+  fragments: Fragment[];
   separator?: string;
 };

@@ -1,4 +1,4 @@
-import type { FragmentCmaClient, FragmentStrategy } from "./types";
+import type { FragmentCmaClient, Fragment } from "./types";
 
 type Options = {
   fieldId: string;
@@ -54,7 +54,7 @@ const resolveTitlesFromValue = async (
   return titles.filter((t) => t !== "").join("/");
 };
 
-export const referencedEntryTitle = ({ fieldId }: Options): FragmentStrategy => ({
+export const referencedEntryTitle = ({ fieldId }: Options): Fragment => ({
   subscribe: ({ sdk, emit }) => {
     const field = sdk.entry.fields[fieldId];
     if (!field) {
