@@ -1,5 +1,5 @@
 {
-  "name": "auto-field-value",
+  "name": "auto-entry-title",
   "version": "0.1.0",
   "private": true,
   "dependencies": {
@@ -16,7 +16,8 @@
   "scripts": {
     "start": "vite",
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && npm run build:functions",
+    "build:functions": "contentful-app-scripts --ci build-functions --manifest-file contentful-app-manifest.json",
     "preview": "vite preview",
     "test": "vitest",
     "test:ci": "vitest run",

@@ -2,14 +2,16 @@ import type { FieldNameComposition } from "./types";
 import { staticString } from "./staticString";
 import { fieldValue } from "./fieldValue";
 import { contentType } from "./contentType";
+import { referencedEntryTitle } from "./referencedEntryTitle";
+import { publicationDate } from "./publicationDate";
 
 export const composition: FieldNameComposition = {
   fragments: [
-    staticString("PUB_DATE_TODO"),
+    publicationDate(),
     staticString("BRAND_TODO"),
     fieldValue({ fieldId: "description" }),
     contentType(),
-    staticString("REGION_TODO"),
+    referencedEntryTitle({ fieldId: "regions" }),
   ],
   separator: " - ",
 };
