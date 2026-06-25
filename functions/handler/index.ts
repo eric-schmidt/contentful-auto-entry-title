@@ -1,4 +1,8 @@
-import type { EntryProps, PlainClientAPI, ReleaseProps } from "contentful-management";
+import type {
+  EntryProps,
+  PlainClientAPI,
+  ReleaseProps,
+} from "contentful-management";
 import { handleRegionPublish } from "./regionTitle";
 import { handleReleaseOrScheduledActionEvent } from "./releaseDate";
 
@@ -11,9 +15,14 @@ type AppEvent = {
   body: EntryProps | ReleaseProps | { sys: { type: string }; entity?: unknown };
 };
 
+// `context.cma` is a pre-initialized PlainClientAPI provided by the Contentful
+// Functions runtime for management-context functions. Constructing our own
+// client from `context.cmaClientOptions` fails with `AxiosError: Unknown
+// adapter 'fetch'` because the bundled axios adapter resolution doesn't work
+// inside the Functions runtime — `context.cma` is fetch-backed and works.
 type FunctionContext = {
   cma: PlainClientAPI;
-  appInstallationId: string;
+  spaceId: string;
   environmentId: string;
 };
 
@@ -31,7 +40,6 @@ export const handler = async (
   if (topic === ENTRY_PUBLISH_TOPIC) {
     await handleRegionPublish({
       cma: context.cma,
-      appInstallationId: context.appInstallationId,
       environmentId: context.environmentId,
       sourceEntry: event.body as EntryProps,
     });
@@ -44,17 +52,11 @@ export const handler = async (
   ) {
     await handleReleaseOrScheduledActionEvent({
       cma: context.cma,
-      appInstallationId: context.appInstallationId,
       environmentId: context.environmentId,
       topic,
       body: event.body as never,
     });
-    return;
   }
-
-  // Unknown topic — no-op. The subscription should never deliver a topic we
-  // don't recognize, but if it does, dropping it silently is safer than
-  // throwing (which would surface as a failed function invocation).
 };
 
 export default handler;

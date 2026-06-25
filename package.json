@@ -17,7 +17,7 @@
     "start": "vite",
     "dev": "vite",
     "build": "vite build && npm run build:functions",
-    "build:functions": "contentful-app-scripts --ci build-functions --manifest-file contentful-app-manifest.json",
+    "build:functions": "contentful-app-scripts --ci build-functions --manifest-file contentful-app-manifest.json --esbuild-config esbuild.functions.config.js",
     "preview": "vite preview",
     "test": "vitest",
     "test:ci": "vitest run",

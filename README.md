@@ -90,6 +90,54 @@ Editing the existing subscription in place is supported — toggle topics, chang
 
 For the function to read editor interfaces and update entries on parents, the App Definition must have CMA permissions sufficient for entry reads + writes. These are configured on the App Definition itself (also in the org-level App Definition settings), not in the Events tab. If the function logs `forbidden` or `unauthorized` errors, that's the place to check.
 
+### Required at build time: `CONTENTFUL_APP_DEF_ID` (build-time inlining via esbuild)
+
+> **Heads-up — this is the one piece of non-obvious build complexity in the repo.** If you skip this section, the function will deploy successfully but **silently update zero entries**. Read it before touching `esbuild.functions.config.js`, `functions/handler/buildtime.d.ts`, or the `build:functions` npm script.
+
+#### What
+
+`npm run build:functions` (which runs as part of `npm run build`) reads `CONTENTFUL_APP_DEF_ID` from the environment and uses esbuild's `define` to inline it into the function bundle as a string literal. The function code references it as the global constant `__APP_DEFINITION_ID__`. If the env var is missing at build time, the build aborts with a clear error.
+
+This is the **same env var** already used by `npm run upload-ci`, so most CI pipelines already have it set. For local builds, set it in your shell or a `.env` file:
+
+```
+CONTENTFUL_APP_DEF_ID=<your-app-definition-id>
+```
+
+#### Why this complexity is necessary
+
+The function needs to know its own App Definition ID at runtime to identify which entries' title fields are bound to this app. The check looks like:
+
+```ts
+editorInterface.controls.find(
+  (c) => c.widgetNamespace === "app" && c.widgetId === __APP_DEFINITION_ID__,
+);
+```
+
+When a content modeler configures a field to use a custom app, Contentful writes the **App Definition ID** into `editorInterface.controls[].widgetId`. Without that comparison, the function has no way to scope its writes to fields managed by this app — it would either touch every app-managed title field in the space (potentially clobbering other apps' fields) or, if we removed the check entirely, only do so by accident.
+
+The wrinkle: **the Contentful function runtime does not provide the App Definition ID in the function context.** The context exposes `cmaClientOptions`, `spaceId`, `environmentId`, and a few other things — but no app identity. We considered three options for sourcing it:
+
+1. **Build-time inlining via esbuild `define`** (chosen). Bundle is self-contained, no per-install configuration, no runtime cost. Cost: one small `esbuild.functions.config.js` file, and the build requires `CONTENTFUL_APP_DEF_ID` to be set.
+2. **`appInstallationParameters` (runtime config screen).** More flexible for multi-customer reuse, but requires building a configuration screen in the React app where the customer types the App Definition ID at install time. Adds runtime UI surface area for a value that's effectively a constant of this build.
+3. **Match by `widgetNamespace === "app"` only, no widgetId check.** Simplest possible, but risks touching unrelated apps' title fields.
+
+For this app's customer-deployment shape (one bundle, one App Definition), option (1) is the lowest total complexity. If this app is ever distributed as a reusable, multi-install marketplace app, switching to option (2) is the right move at that point.
+
+#### How it fits together
+
+| File | Role |
+|---|---|
+| `esbuild.functions.config.js` | esbuild config that reads `process.env.CONTENTFUL_APP_DEF_ID` and `define`s it as `__APP_DEFINITION_ID__`. |
+| `functions/handler/buildtime.d.ts` | One-line `declare const __APP_DEFINITION_ID__: string;` so TypeScript and editors recognize the global. |
+| `functions/shared/findManagedTitleFieldId.ts` | Uses `__APP_DEFINITION_ID__` in the editor-interface match. |
+| `package.json` (`build:functions` script) | Passes `--esbuild-config esbuild.functions.config.js` to `contentful-app-scripts build-functions`. |
+
+#### Operational notes
+
+- **If you change which App Definition the bundle is built for**, rebuild and re-upload. The id is baked in.
+- **Tests** stub `globalThis.__APP_DEFINITION_ID__` in a `beforeAll` block (see `functions/handler/regionTitle.spec.ts`).
+
 ## Publication date fragment (Releases & Scheduled Actions)
 
 This is the most architecturally nuanced piece of the app. If you are extending or debugging the publication-date behavior, read this section in full before changing any code in `src/fragments/publicationDate.ts` or `functions/handler/releaseDate.ts`.

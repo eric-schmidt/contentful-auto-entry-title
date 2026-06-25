@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
 
 vi.mock("../../src/fragments", () => ({
   composition: {
@@ -16,6 +16,14 @@ vi.mock("../../src/fragments/compose", () => ({
 import { handleRegionPublish } from "./regionTitle";
 import { composeTitle } from "../../src/fragments/compose";
 
+const APP_DEF_ID = "test-app-def-id";
+
+beforeAll(() => {
+  // The function code references the build-time-injected `__APP_DEFINITION_ID__`
+  // global; in tests we stub it onto globalThis.
+  (globalThis as { __APP_DEFINITION_ID__?: string }).__APP_DEFINITION_ID__ = APP_DEF_ID;
+});
+
 const buildSourceEntry = (overrides: { contentTypeId?: string; entryId?: string } = {}) => ({
   sys: {
     id: overrides.entryId ?? "region-1",
@@ -29,9 +37,11 @@ const buildParent = (overrides: {
   contentTypeId: string;
   titleFieldId?: string;
   currentTitle?: string;
+  version?: number;
 }) => ({
   sys: {
     id: overrides.id,
+    version: overrides.version ?? 1,
     contentType: { sys: { id: overrides.contentTypeId } },
   },
   fields: overrides.titleFieldId
@@ -41,15 +51,22 @@ const buildParent = (overrides: {
     : {},
 });
 
+const defaultPatch = vi.fn(async ({ entryId }: { entryId: string }, _ops) => ({
+  sys: { id: entryId, version: 2 },
+  fields: { internalTitle: { "en-US": "EMEA - blogPost" } },
+}));
+
 const buildArgs = (
   parents: ReturnType<typeof buildParent>[],
   editorInterfaces: Record<
     string,
     { controls?: { fieldId: string; widgetNamespace: string; widgetId: string }[] }
   >,
-  appInstallationId = "auto-entry-title-app",
 ) => {
-  const update = vi.fn(async (_id, payload) => payload);
+  const patch = vi.fn(async ({ entryId }: { entryId: string }, _ops) => ({
+    sys: { id: entryId, version: 2 },
+    fields: { internalTitle: { "en-US": "EMEA - blogPost" } },
+  }));
   const cma = {
     locale: {
       getMany: vi.fn(async () => ({
@@ -61,7 +78,7 @@ const buildArgs = (
         items: query.skip === 0 ? parents : [],
         total: parents.length,
       })),
-      update,
+      patch,
     },
     editorInterface: {
       get: vi.fn(async ({ contentTypeId }: { contentTypeId: string }) => {
@@ -71,7 +88,7 @@ const buildArgs = (
       }),
     },
   };
-  return { cma, appInstallationId, environmentId: "master", update };
+  return { cma, environmentId: "master", patch };
 };
 
 describe("handleRegionPublish", () => {
@@ -80,6 +97,7 @@ describe("handleRegionPublish", () => {
   beforeEach(() => {
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.mocked(composeTitle).mockClear();
+    defaultPatch.mockClear();
   });
 
   afterEach(() => {
@@ -90,7 +108,6 @@ describe("handleRegionPublish", () => {
     const args = buildArgs([], {});
     await handleRegionPublish({
       cma: args.cma as never,
-      appInstallationId: args.appInstallationId,
       environmentId: args.environmentId,
       sourceEntry: buildSourceEntry({ contentTypeId: "blogPost" }) as never,
     });
@@ -101,19 +118,19 @@ describe("handleRegionPublish", () => {
     const args = buildArgs([], {});
     await handleRegionPublish({
       cma: args.cma as never,
-      appInstallationId: args.appInstallationId,
       environmentId: args.environmentId,
       sourceEntry: buildSourceEntry() as never,
     });
-    expect(args.update).not.toHaveBeenCalled();
+    expect(args.patch).not.toHaveBeenCalled();
   });
 
-  it("updates only entries whose title field is managed by this app", async () => {
+  it("patches only entries whose title field is managed by this app", async () => {
     const managed = buildParent({
       id: "p-managed",
       contentTypeId: "blogPost",
       titleFieldId: "internalTitle",
       currentTitle: "old",
+      version: 7,
     });
     const unmanaged = buildParent({ id: "p-unmanaged", contentTypeId: "campaign" });
     const args = buildArgs([managed, unmanaged], {
@@ -122,7 +139,7 @@ describe("handleRegionPublish", () => {
           {
             fieldId: "internalTitle",
             widgetNamespace: "app",
-            widgetId: "auto-entry-title-app",
+            widgetId: APP_DEF_ID,
           },
         ],
       },
@@ -131,23 +148,52 @@ describe("handleRegionPublish", () => {
 
     await handleRegionPublish({
       cma: args.cma as never,
-      appInstallationId: args.appInstallationId,
       environmentId: args.environmentId,
       sourceEntry: buildSourceEntry() as never,
     });
 
-    expect(args.update).toHaveBeenCalledTimes(1);
-    expect(args.update).toHaveBeenCalledWith(
-      { entryId: "p-managed" },
-      expect.objectContaining({
-        fields: expect.objectContaining({
-          internalTitle: { "en-US": "EMEA - blogPost" },
-        }),
-      }),
+    expect(args.patch).toHaveBeenCalledTimes(1);
+    expect(args.patch).toHaveBeenCalledWith(
+      { entryId: "p-managed", version: 7 },
+      [
+        {
+          op: "add",
+          path: "/fields/internalTitle/en-US",
+          value: "EMEA - blogPost",
+        },
+      ],
     );
   });
 
-  it("skips the CMA write when the new title matches the current title", async () => {
+  it("ignores controls whose widgetId doesn't match this app's definition id", async () => {
+    const parent = buildParent({
+      id: "p1",
+      contentTypeId: "blogPost",
+      titleFieldId: "internalTitle",
+      currentTitle: "old",
+    });
+    const args = buildArgs([parent], {
+      blogPost: {
+        controls: [
+          {
+            fieldId: "internalTitle",
+            widgetNamespace: "app",
+            widgetId: "some-other-app",
+          },
+        ],
+      },
+    });
+
+    await handleRegionPublish({
+      cma: args.cma as never,
+      environmentId: args.environmentId,
+      sourceEntry: buildSourceEntry() as never,
+    });
+
+    expect(args.patch).not.toHaveBeenCalled();
+  });
+
+  it("skips the CMA patch when the new title matches the current title", async () => {
     const parent = buildParent({
       id: "p1",
       contentTypeId: "blogPost",
@@ -160,7 +206,7 @@ describe("handleRegionPublish", () => {
           {
             fieldId: "internalTitle",
             widgetNamespace: "app",
-            widgetId: "auto-entry-title-app",
+            widgetId: APP_DEF_ID,
           },
         ],
       },
@@ -168,16 +214,18 @@ describe("handleRegionPublish", () => {
 
     await handleRegionPublish({
       cma: args.cma as never,
-      appInstallationId: args.appInstallationId,
       environmentId: args.environmentId,
       sourceEntry: buildSourceEntry() as never,
     });
 
-    expect(args.update).not.toHaveBeenCalled();
+    expect(args.patch).not.toHaveBeenCalled();
   });
 
   it("paginates through links_to_entry results", async () => {
-    const update = vi.fn(async (_id, payload) => payload);
+    const patch = vi.fn(async ({ entryId }: { entryId: string }) => ({
+      sys: { id: entryId, version: 2 },
+      fields: { internalTitle: { "en-US": "EMEA - blogPost" } },
+    }));
     let call = 0;
     const cma = {
       locale: {
@@ -213,7 +261,7 @@ describe("handleRegionPublish", () => {
             total: 101,
           };
         }),
-        update,
+        patch,
       },
       editorInterface: {
         get: vi.fn(async () => ({
@@ -221,7 +269,7 @@ describe("handleRegionPublish", () => {
             {
               fieldId: "internalTitle",
               widgetNamespace: "app",
-              widgetId: "auto-entry-title-app",
+              widgetId: APP_DEF_ID,
             },
           ],
         })),
@@ -230,16 +278,15 @@ describe("handleRegionPublish", () => {
 
     await handleRegionPublish({
       cma: cma as never,
-      appInstallationId: "auto-entry-title-app",
       environmentId: "master",
       sourceEntry: buildSourceEntry() as never,
     });
 
     expect(cma.entry.getMany).toHaveBeenCalledTimes(2);
-    expect(update).toHaveBeenCalledTimes(101);
+    expect(patch).toHaveBeenCalledTimes(101);
   });
 
-  it("continues processing other parents when one parent's update fails", async () => {
+  it("continues processing other parents when one parent's patch fails", async () => {
     const p1 = buildParent({
       id: "p1",
       contentTypeId: "blogPost",
@@ -252,10 +299,13 @@ describe("handleRegionPublish", () => {
       titleFieldId: "internalTitle",
       currentTitle: "old",
     });
-    const update = vi
+    const patch = vi
       .fn()
       .mockRejectedValueOnce(new Error("conflict"))
-      .mockResolvedValueOnce({});
+      .mockResolvedValueOnce({
+        sys: { id: "p2", version: 2 },
+        fields: { internalTitle: { "en-US": "EMEA - blogPost" } },
+      });
     const cma = {
       locale: {
         getMany: vi.fn(async () => ({
@@ -264,7 +314,7 @@ describe("handleRegionPublish", () => {
       },
       entry: {
         getMany: vi.fn(async () => ({ items: [p1, p2], total: 2 })),
-        update,
+        patch,
       },
       editorInterface: {
         get: vi.fn(async () => ({
@@ -272,7 +322,7 @@ describe("handleRegionPublish", () => {
             {
               fieldId: "internalTitle",
               widgetNamespace: "app",
-              widgetId: "auto-entry-title-app",
+              widgetId: APP_DEF_ID,
             },
           ],
         })),
@@ -281,12 +331,11 @@ describe("handleRegionPublish", () => {
 
     await handleRegionPublish({
       cma: cma as never,
-      appInstallationId: "auto-entry-title-app",
       environmentId: "master",
       sourceEntry: buildSourceEntry() as never,
     });
 
-    expect(update).toHaveBeenCalledTimes(2);
+    expect(patch).toHaveBeenCalledTimes(2);
     expect(warnSpy).toHaveBeenCalled();
   });
 });

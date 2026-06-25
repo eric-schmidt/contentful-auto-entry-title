@@ -16,6 +16,54 @@ export const formatPublicationDate = (iso: string, timezone?: string): string =>
   return fmt.format(date).replace(" ", "-");
 };
 
+type ScheduledActionItem = {
+  sys?: { id?: string; status?: string };
+  entity?: { sys?: { id?: string; linkType?: string } };
+  scheduledFor?: { datetime?: string; timezone?: string };
+};
+
+// When a user schedules a Launch release, Contentful fires `Release.save`
+// before the corresponding ScheduledAction entity is fully persisted. Without
+// retries, our query at the moment Release.save fires returns 0 items even
+// though the schedule will exist within the next second or so. Max ~3.75s
+// total wait.
+const SCHEDULE_LOOKUP_RETRY_DELAYS_MS = [0, 250, 500, 1000, 2000];
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const fetchMatchingScheduledActions = async (
+  cma: FragmentCmaClient,
+  releaseIds: string[],
+  environmentId: string,
+): Promise<ScheduledActionItem[]> => {
+  const releaseIdSet = new Set(releaseIds);
+
+  // Contentful's scheduled-actions endpoint silently ignores `entity.sys.id[in]`
+  // — the documented filter is `entity.sys.id` (singular). For multiple
+  // releases we issue one query per release id and merge the results.
+  const perReleaseResponses = await Promise.all(
+    releaseIds.map((releaseId) =>
+      cma.scheduledActions.getMany({
+        query: {
+          "entity.sys.id": releaseId,
+          "entity.sys.linkType": "Release",
+          "environment.sys.id": environmentId,
+          "sys.status": "scheduled",
+        },
+      }),
+    ),
+  );
+
+  return perReleaseResponses
+    .flatMap((r) => r.items)
+    .filter(
+      (a) =>
+        a.entity?.sys?.linkType === "Release" &&
+        typeof a.entity?.sys?.id === "string" &&
+        releaseIdSet.has(a.entity.sys.id),
+    );
+};
+
 const findScheduledDateForEntry = async (
   cma: FragmentCmaClient,
   entryId: string,
@@ -30,26 +78,32 @@ const findScheduledDateForEntry = async (
   if (!releases.items.length) return "";
 
   const releaseIds = releases.items.map((r) => r.sys.id);
-  const scheduled = await cma.scheduledActions.getMany({
-    query: {
-      "entity.sys.id[in]": releaseIds.join(","),
-      "entity.sys.linkType": "Release",
-      "environment.sys.id": environmentId,
-      "sys.status": "scheduled",
-    },
-  });
-  if (!scheduled.items.length) return "";
+
+  let filteredItems: ScheduledActionItem[] = [];
+  for (const delay of SCHEDULE_LOOKUP_RETRY_DELAYS_MS) {
+    if (delay > 0) await sleep(delay);
+    filteredItems = await fetchMatchingScheduledActions(
+      cma,
+      releaseIds,
+      environmentId,
+    );
+    if (filteredItems.length > 0) break;
+  }
+
+  if (!filteredItems.length) return "";
 
   // If multiple Releases the entry sits in are scheduled, pick the earliest.
-  const earliest = scheduled.items
+  const earliest = filteredItems
     .map((a) => ({
-      datetime: a.scheduledFor.datetime,
-      timezone: a.scheduledFor.timezone,
+      datetime: a.scheduledFor?.datetime,
+      timezone: a.scheduledFor?.timezone,
     }))
-    .filter((a) => typeof a.datetime === "string")
-    .sort((a, b) => a.datetime.localeCompare(b.datetime))[0];
+    .filter((a) => typeof a.datetime === "string" && a.datetime.length > 0)
+    .sort((a, b) =>
+      (a.datetime as string).localeCompare(b.datetime as string),
+    )[0];
 
-  if (!earliest) return "";
+  if (!earliest || !earliest.datetime) return "";
   return formatPublicationDate(earliest.datetime, earliest.timezone);
 };
 
@@ -60,7 +114,7 @@ const findScheduledDateForEntry = async (
 // changes — but it can still read the current state on mount, so the editor's
 // emitted value matches the persisted title and other-fragment edits don't
 // strip the date. The handler function performs the same lookup when a
-// Release or ScheduledAction event fires elsewhere.
+// Release event fires elsewhere.
 export const publicationDate = (): Fragment => ({
   subscribe: ({ sdk, emit }) => {
     let cancelled = false;

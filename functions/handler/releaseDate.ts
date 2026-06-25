@@ -5,6 +5,11 @@ import { recomputeTitleForEntries } from "../shared/recomputeTitleForEntries";
 const RELEASE_TOPIC_PREFIX = "ContentManagement.Release.";
 const SCHEDULED_ACTION_TOPIC_PREFIX = "ContentManagement.ScheduledAction.";
 
+// Backoff schedule for retrying the release fetch. `Release.save` events can
+// fire before the corresponding release-side write is fully queryable; a
+// short retry covers that window. Max wait ~3.75s total.
+const RELEASE_FETCH_RETRY_DELAYS_MS = [0, 250, 500, 1000, 2000];
+
 type ScheduledActionEventBody = {
   sys: { id: string; type: "ScheduledAction" };
   entity: { sys: { id: string; linkType: string } };
@@ -12,11 +17,12 @@ type ScheduledActionEventBody = {
 
 type Args = {
   cma: PlainClientAPI;
-  appInstallationId: string;
   environmentId: string;
   topic: string;
   body: ReleaseProps | ScheduledActionEventBody;
 };
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const resolveReleaseId = (
   topic: string,
@@ -33,18 +39,30 @@ const resolveReleaseId = (
   return null;
 };
 
-const safeReleaseGet = async (
+// Fetch the release with retries, returning the first response that has at
+// least one Entry member. The release entity can be served back without its
+// new membership immediately after a Release.save event — this retry bridges
+// that consistency window. Returns null if the release no longer exists.
+const safeReleaseGetWithMembers = async (
   cma: PlainClientAPI,
   releaseId: string,
 ): Promise<ReleaseProps | null> => {
-  try {
-    return await cma.release.get({ releaseId });
-  } catch {
-    // Release no longer exists (e.g., this is a ScheduledAction.delete that
-    // arrived after the Release itself was deleted). We can't recover the
-    // membership list — accept the loss and exit cleanly.
-    return null;
+  let lastResponse: ReleaseProps | null = null;
+  for (const delay of RELEASE_FETCH_RETRY_DELAYS_MS) {
+    if (delay > 0) await sleep(delay);
+    let release: ReleaseProps;
+    try {
+      release = await cma.release.get({ releaseId });
+    } catch {
+      return null;
+    }
+    lastResponse = release;
+    const entryCount = (release.entities?.items ?? []).filter(
+      (link) => link.sys.linkType === "Entry",
+    ).length;
+    if (entryCount > 0) return release;
   }
+  return lastResponse;
 };
 
 // Handles Release.* and ScheduledAction.* events. For ScheduledAction events
@@ -52,7 +70,6 @@ const safeReleaseGet = async (
 // the affected Release and recomputes the title of each entry member.
 export const handleReleaseOrScheduledActionEvent = async ({
   cma,
-  appInstallationId,
   environmentId,
   topic,
   body,
@@ -60,7 +77,7 @@ export const handleReleaseOrScheduledActionEvent = async ({
   const releaseId = resolveReleaseId(topic, body);
   if (!releaseId) return;
 
-  const release = await safeReleaseGet(cma, releaseId);
+  const release = await safeReleaseGetWithMembers(cma, releaseId);
   if (!release) return;
 
   const entryLinks = (release.entities?.items ?? []).filter(
@@ -85,7 +102,6 @@ export const handleReleaseOrScheduledActionEvent = async ({
 
   await recomputeTitleForEntries({
     cma,
-    appInstallationId,
     environmentId,
     defaultLocale,
     entries,

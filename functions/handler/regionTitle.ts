@@ -7,7 +7,6 @@ const PAGE_SIZE = 100;
 
 type Args = {
   cma: PlainClientAPI;
-  appInstallationId: string;
   environmentId: string;
   sourceEntry: EntryProps;
 };
@@ -34,7 +33,6 @@ const paginateLinksToEntry = async (
 // referencing entry's auto-generated title.
 export const handleRegionPublish = async ({
   cma,
-  appInstallationId,
   environmentId,
   sourceEntry,
 }: Args): Promise<void> => {
@@ -45,7 +43,6 @@ export const handleRegionPublish = async ({
 
   await recomputeTitleForEntries({
     cma,
-    appInstallationId,
     environmentId,
     defaultLocale,
     entries: referencingEntries,

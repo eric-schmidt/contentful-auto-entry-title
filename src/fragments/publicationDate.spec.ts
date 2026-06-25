@@ -1,6 +1,32 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { publicationDate, formatPublicationDate } from "./publicationDate";
 import { mockEmitter } from "./testEmitter";
+
+// The scheduled-actions lookup retries with backoff (up to ~3.75s total) to
+// bridge Contentful's release-save → scheduled-action consistency window.
+// Fake timers fast-forward through retries so tests stay fast.
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+type ScheduledItem = {
+  sys?: { id?: string; status?: string };
+  entity?: { sys?: { id?: string; linkType?: string } };
+  scheduledFor: { datetime: string; timezone?: string };
+};
+
+const buildScheduledFor = (
+  releaseId: string,
+  scheduledFor: { datetime: string; timezone?: string },
+): ScheduledItem => ({
+  sys: { id: `sa-${releaseId}`, status: "scheduled" },
+  entity: { sys: { id: releaseId, linkType: "Release" } },
+  scheduledFor,
+});
 
 describe("formatPublicationDate", () => {
   it("returns Mon-DD with leading-zero day", () => {
@@ -9,7 +35,6 @@ describe("formatPublicationDate", () => {
   });
 
   it("computes the date in the supplied timezone", () => {
-    // 2026-07-04 03:00 UTC is 2026-07-03 20:00 in Los Angeles.
     expect(
       formatPublicationDate("2026-07-04T03:00:00Z", "America/Los_Angeles"),
     ).toBe("Jul-03");
@@ -28,11 +53,7 @@ describe("publicationDate", () => {
   describe("subscribe", () => {
     const buildSdk = (
       releases: { items: { sys: { id: string } }[] },
-      scheduled: {
-        items: {
-          scheduledFor: { datetime: string; timezone?: string };
-        }[];
-      },
+      scheduled: { items: ScheduledItem[] },
       ids: { entry?: string; environment?: string; environmentAlias?: string } = {},
     ) =>
       ({
@@ -47,7 +68,9 @@ describe("publicationDate", () => {
         },
       }) as never;
 
-    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const flush = async () => {
+      await vi.runAllTimersAsync();
+    };
 
     it("emits empty string when the entry isn't in any release", async () => {
       const emit = mockEmitter();
@@ -63,13 +86,15 @@ describe("publicationDate", () => {
       expect(() => teardown()).not.toThrow();
     });
 
-    it("emits the formatted date when a scheduled release exists", async () => {
+    it("emits the formatted date when a scheduled action exists for the release", async () => {
       const emit = mockEmitter();
       publicationDate().subscribe({
         sdk: buildSdk(
           { items: [{ sys: { id: "rel-1" } }] },
           {
-            items: [{ scheduledFor: { datetime: "2026-07-04T12:00:00Z" } }],
+            items: [
+              buildScheduledFor("rel-1", { datetime: "2026-07-04T12:00:00Z" }),
+            ],
           },
         ),
         emit,
@@ -78,6 +103,62 @@ describe("publicationDate", () => {
       await flush();
 
       expect(emit).toHaveBeenCalledExactlyOnceWith("Jul-04");
+    });
+
+    it("queries scheduled actions with entity.sys.id (singular) not [in]", async () => {
+      const getMany = vi.fn(async () => ({ items: [] }));
+      const sdk = {
+        ids: { entry: "p1", environment: "master" },
+        cma: {
+          release: {
+            query: vi.fn(async () => ({ items: [{ sys: { id: "rel-1" } }] })),
+          },
+          scheduledActions: { getMany },
+        },
+      } as never;
+
+      publicationDate().subscribe({ sdk, emit: mockEmitter() });
+
+      await flush();
+
+      expect(getMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: expect.objectContaining({
+            "entity.sys.id": "rel-1",
+            "entity.sys.linkType": "Release",
+            "sys.status": "scheduled",
+          }),
+        }),
+      );
+      // Critically, NOT entity.sys.id[in] — Contentful's scheduled-actions
+      // endpoint silently ignores it.
+      expect(getMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: expect.objectContaining({ "entity.sys.id[in]": expect.anything() }),
+        }),
+      );
+    });
+
+    it("client-side-filters out scheduled actions targeting a different release", async () => {
+      const emit = mockEmitter();
+      publicationDate().subscribe({
+        sdk: buildSdk(
+          { items: [{ sys: { id: "rel-our" } }] },
+          {
+            items: [
+              buildScheduledFor("rel-other", {
+                datetime: "2026-06-26T14:00:00.000-06:00",
+                timezone: "America/Denver",
+              }),
+            ],
+          },
+        ),
+        emit,
+      });
+
+      await flush();
+
+      expect(emit).toHaveBeenCalledExactlyOnceWith("");
     });
 
     it("uses environmentAlias when present, environment otherwise", async () => {
@@ -144,11 +225,7 @@ describe("publicationDate", () => {
   describe("compute", () => {
     const buildCma = (
       releases: { items: { sys: { id: string } }[] },
-      scheduled: {
-        items: {
-          scheduledFor: { datetime: string; timezone?: string };
-        }[];
-      },
+      scheduled: { items: ScheduledItem[] },
     ) =>
       ({
         release: { query: vi.fn(async () => releases) },
@@ -163,12 +240,14 @@ describe("publicationDate", () => {
 
     it("returns empty string when entry isn't in any release", async () => {
       const cma = buildCma({ items: [] }, { items: [] });
-      const result = await publicationDate().compute({
+      const promise = publicationDate().compute({
         entry: buildEntry(),
         cma,
         defaultLocale: "en-US",
         environmentId: "master",
       });
+      await vi.runAllTimersAsync();
+      const result = await promise;
 
       expect(result).toBe("");
     });
@@ -178,31 +257,35 @@ describe("publicationDate", () => {
         { items: [{ sys: { id: "rel-1" } }] },
         { items: [] },
       );
-      const result = await publicationDate().compute({
+      const promise = publicationDate().compute({
         entry: buildEntry(),
         cma,
         defaultLocale: "en-US",
         environmentId: "master",
       });
+      await vi.runAllTimersAsync();
+      const result = await promise;
 
       expect(result).toBe("");
     });
 
-    it("returns the formatted date when a scheduled release exists", async () => {
+    it("returns the formatted date when a scheduled action exists", async () => {
       const cma = buildCma(
         { items: [{ sys: { id: "rel-1" } }] },
         {
           items: [
-            { scheduledFor: { datetime: "2026-07-04T12:00:00Z" } },
+            buildScheduledFor("rel-1", { datetime: "2026-07-04T12:00:00Z" }),
           ],
         },
       );
-      const result = await publicationDate().compute({
+      const promise = publicationDate().compute({
         entry: buildEntry(),
         cma,
         defaultLocale: "en-US",
         environmentId: "master",
       });
+      await vi.runAllTimersAsync();
+      const result = await promise;
 
       expect(result).toBe("Jul-04");
     });
@@ -212,21 +295,21 @@ describe("publicationDate", () => {
         { items: [{ sys: { id: "rel-1" } }] },
         {
           items: [
-            {
-              scheduledFor: {
-                datetime: "2026-07-04T03:00:00Z",
-                timezone: "America/Los_Angeles",
-              },
-            },
+            buildScheduledFor("rel-1", {
+              datetime: "2026-07-04T03:00:00Z",
+              timezone: "America/Los_Angeles",
+            }),
           ],
         },
       );
-      const result = await publicationDate().compute({
+      const promise = publicationDate().compute({
         entry: buildEntry(),
         cma,
         defaultLocale: "en-US",
         environmentId: "master",
       });
+      await vi.runAllTimersAsync();
+      const result = await promise;
 
       expect(result).toBe("Jul-03");
     });
@@ -238,19 +321,42 @@ describe("publicationDate", () => {
         },
         {
           items: [
-            { scheduledFor: { datetime: "2026-08-15T12:00:00Z" } },
-            { scheduledFor: { datetime: "2026-07-04T12:00:00Z" } },
+            buildScheduledFor("rel-1", { datetime: "2026-08-15T12:00:00Z" }),
+            buildScheduledFor("rel-2", { datetime: "2026-07-04T12:00:00Z" }),
           ],
         },
       );
-      const result = await publicationDate().compute({
+      const promise = publicationDate().compute({
         entry: buildEntry(),
         cma,
         defaultLocale: "en-US",
         environmentId: "master",
       });
+      await vi.runAllTimersAsync();
+      const result = await promise;
 
       expect(result).toBe("Jul-04");
+    });
+
+    it("ignores returned items that target a different release", async () => {
+      const cma = buildCma(
+        { items: [{ sys: { id: "rel-our" } }] },
+        {
+          items: [
+            buildScheduledFor("rel-other", { datetime: "2026-06-26T12:00:00Z" }),
+          ],
+        },
+      );
+      const promise = publicationDate().compute({
+        entry: buildEntry(),
+        cma,
+        defaultLocale: "en-US",
+        environmentId: "master",
+      });
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(result).toBe("");
     });
   });
 });

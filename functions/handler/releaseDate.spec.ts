@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
 
 vi.mock("../../src/fragments", () => ({
   composition: {
@@ -19,6 +19,11 @@ import { composeTitle } from "../../src/fragments/compose";
 const RELEASE_SAVE = "ContentManagement.Release.save";
 const SCHEDULED_ACTION_CREATE = "ContentManagement.ScheduledAction.create";
 const SCHEDULED_ACTION_DELETE = "ContentManagement.ScheduledAction.delete";
+const APP_DEF_ID = "test-app-def-id";
+
+beforeAll(() => {
+  (globalThis as { __APP_DEFINITION_ID__?: string }).__APP_DEFINITION_ID__ = APP_DEF_ID;
+});
 
 const buildReleaseBody = (releaseId = "rel-1") => ({
   sys: { id: releaseId, type: "Release" as const },
@@ -37,9 +42,11 @@ const buildParent = (overrides: {
   contentTypeId: string;
   titleFieldId?: string;
   currentTitle?: string;
+  version?: number;
 }) => ({
   sys: {
     id: overrides.id,
+    version: overrides.version ?? 1,
     contentType: { sys: { id: overrides.contentTypeId } },
   },
   fields: overrides.titleFieldId
@@ -56,9 +63,11 @@ const buildArgs = (overrides: {
     string,
     { controls?: { fieldId: string; widgetNamespace: string; widgetId: string }[] }
   >;
-  appInstallationId?: string;
 }) => {
-  const update = vi.fn(async (_id, payload) => payload);
+  const patch = vi.fn(async ({ entryId }: { entryId: string }) => ({
+    sys: { id: entryId, version: 2 },
+    fields: { internalTitle: { "en-US": "Jul-04 - composed" } },
+  }));
   const releaseGet = vi.fn(async () => {
     if (overrides.release === null) throw new Error("404");
     return overrides.release ?? { entities: { items: [] } };
@@ -82,15 +91,14 @@ const buildArgs = (overrides: {
       })),
     },
     release: { get: releaseGet },
-    entry: { get: entryGet, update },
+    entry: { get: entryGet, patch },
     editorInterface: { get: editorInterfaceGet },
   };
   return {
     cma,
-    update,
+    patch,
     releaseGet,
     entryGet,
-    appInstallationId: overrides.appInstallationId ?? "auto-entry-title-app",
     environmentId: "master",
   };
 };
@@ -102,17 +110,29 @@ describe("handleReleaseOrScheduledActionEvent", () => {
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.mocked(composeTitle).mockClear();
     vi.mocked(composeTitle).mockResolvedValue("Jul-04 - composed");
+    // The release-fetch retry loop uses real setTimeout for backoff. Fake
+    // timers let us fast-forward through retries without real waits.
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
     warnSpy.mockRestore();
+    vi.useRealTimers();
   });
+
+  // Helper: kick off the handler, advance through any retry timers, then await.
+  const runHandler = async (
+    args: Parameters<typeof handleReleaseOrScheduledActionEvent>[0],
+  ) => {
+    const promise = handleReleaseOrScheduledActionEvent(args);
+    await vi.runAllTimersAsync();
+    await promise;
+  };
 
   it("ignores ScheduledAction events whose target isn't a Release", async () => {
     const args = buildArgs({});
-    await handleReleaseOrScheduledActionEvent({
+    await runHandler({
       cma: args.cma as never,
-      appInstallationId: args.appInstallationId,
       environmentId: args.environmentId,
       topic: SCHEDULED_ACTION_CREATE,
       body: buildScheduledActionBody({ linkType: "Entry" }) as never,
@@ -122,34 +142,33 @@ describe("handleReleaseOrScheduledActionEvent", () => {
 
   it("exits cleanly when the Release is no longer findable", async () => {
     const args = buildArgs({ release: null });
-    await handleReleaseOrScheduledActionEvent({
+    await runHandler({
       cma: args.cma as never,
-      appInstallationId: args.appInstallationId,
       environmentId: args.environmentId,
       topic: RELEASE_SAVE,
       body: buildReleaseBody() as never,
     });
-    expect(args.update).not.toHaveBeenCalled();
+    expect(args.patch).not.toHaveBeenCalled();
   });
 
   it("does no work when the Release has no entry members", async () => {
     const args = buildArgs({ release: { entities: { items: [] } } });
-    await handleReleaseOrScheduledActionEvent({
+    await runHandler({
       cma: args.cma as never,
-      appInstallationId: args.appInstallationId,
       environmentId: args.environmentId,
       topic: RELEASE_SAVE,
       body: buildReleaseBody() as never,
     });
-    expect(args.update).not.toHaveBeenCalled();
+    expect(args.patch).not.toHaveBeenCalled();
   });
 
-  it("updates only entries whose title field is managed by this app", async () => {
+  it("patches only entries whose title field is managed by this app", async () => {
     const managed = buildParent({
       id: "p-managed",
       contentTypeId: "blogPost",
       titleFieldId: "internalTitle",
       currentTitle: "old",
+      version: 5,
     });
     const unmanaged = buildParent({
       id: "p-unmanaged",
@@ -171,7 +190,7 @@ describe("handleReleaseOrScheduledActionEvent", () => {
             {
               fieldId: "internalTitle",
               widgetNamespace: "app",
-              widgetId: "auto-entry-title-app",
+              widgetId: APP_DEF_ID,
             },
           ],
         },
@@ -179,22 +198,23 @@ describe("handleReleaseOrScheduledActionEvent", () => {
       },
     });
 
-    await handleReleaseOrScheduledActionEvent({
+    await runHandler({
       cma: args.cma as never,
-      appInstallationId: args.appInstallationId,
       environmentId: args.environmentId,
       topic: RELEASE_SAVE,
       body: buildReleaseBody() as never,
     });
 
-    expect(args.update).toHaveBeenCalledTimes(1);
-    expect(args.update).toHaveBeenCalledWith(
-      { entryId: "p-managed" },
-      expect.objectContaining({
-        fields: expect.objectContaining({
-          internalTitle: { "en-US": "Jul-04 - composed" },
-        }),
-      }),
+    expect(args.patch).toHaveBeenCalledTimes(1);
+    expect(args.patch).toHaveBeenCalledWith(
+      { entryId: "p-managed", version: 5 },
+      [
+        {
+          op: "add",
+          path: "/fields/internalTitle/en-US",
+          value: "Jul-04 - composed",
+        },
+      ],
     );
   });
 
@@ -205,6 +225,7 @@ describe("handleReleaseOrScheduledActionEvent", () => {
       contentTypeId: "blogPost",
       titleFieldId: "internalTitle",
       currentTitle: "Jul-04 - Brand - composed",
+      version: 3,
     });
     const args = buildArgs({
       release: {
@@ -217,32 +238,33 @@ describe("handleReleaseOrScheduledActionEvent", () => {
             {
               fieldId: "internalTitle",
               widgetNamespace: "app",
-              widgetId: "auto-entry-title-app",
+              widgetId: APP_DEF_ID,
             },
           ],
         },
       },
     });
 
-    await handleReleaseOrScheduledActionEvent({
+    await runHandler({
       cma: args.cma as never,
-      appInstallationId: args.appInstallationId,
       environmentId: args.environmentId,
       topic: SCHEDULED_ACTION_DELETE,
       body: buildScheduledActionBody({}) as never,
     });
 
-    expect(args.update).toHaveBeenCalledWith(
-      { entryId: "p1" },
-      expect.objectContaining({
-        fields: expect.objectContaining({
-          internalTitle: { "en-US": "Brand - composed" },
-        }),
-      }),
+    expect(args.patch).toHaveBeenCalledWith(
+      { entryId: "p1", version: 3 },
+      [
+        {
+          op: "add",
+          path: "/fields/internalTitle/en-US",
+          value: "Brand - composed",
+        },
+      ],
     );
   });
 
-  it("skips the CMA write when the new title matches the current title", async () => {
+  it("skips the CMA patch when the new title matches the current title", async () => {
     vi.mocked(composeTitle).mockResolvedValueOnce("Jul-04 - composed");
     const parent = buildParent({
       id: "p1",
@@ -261,29 +283,31 @@ describe("handleReleaseOrScheduledActionEvent", () => {
             {
               fieldId: "internalTitle",
               widgetNamespace: "app",
-              widgetId: "auto-entry-title-app",
+              widgetId: APP_DEF_ID,
             },
           ],
         },
       },
     });
 
-    await handleReleaseOrScheduledActionEvent({
+    await runHandler({
       cma: args.cma as never,
-      appInstallationId: args.appInstallationId,
       environmentId: args.environmentId,
       topic: RELEASE_SAVE,
       body: buildReleaseBody() as never,
     });
 
-    expect(args.update).not.toHaveBeenCalled();
+    expect(args.patch).not.toHaveBeenCalled();
   });
 
   it("continues processing other parents when one parent fails", async () => {
-    const update = vi
+    const patch = vi
       .fn()
       .mockRejectedValueOnce(new Error("conflict"))
-      .mockResolvedValueOnce({});
+      .mockResolvedValueOnce({
+        sys: { id: "p2", version: 2 },
+        fields: { internalTitle: { "en-US": "Jul-04 - composed" } },
+      });
     const args = buildArgs({
       release: {
         entities: {
@@ -313,23 +337,22 @@ describe("handleReleaseOrScheduledActionEvent", () => {
             {
               fieldId: "internalTitle",
               widgetNamespace: "app",
-              widgetId: "auto-entry-title-app",
+              widgetId: APP_DEF_ID,
             },
           ],
         },
       },
     });
-    args.cma.entry.update = update;
+    args.cma.entry.patch = patch;
 
-    await handleReleaseOrScheduledActionEvent({
+    await runHandler({
       cma: args.cma as never,
-      appInstallationId: args.appInstallationId,
       environmentId: args.environmentId,
       topic: RELEASE_SAVE,
       body: buildReleaseBody() as never,
     });
 
-    expect(update).toHaveBeenCalledTimes(2);
+    expect(patch).toHaveBeenCalledTimes(2);
     expect(warnSpy).toHaveBeenCalled();
   });
 });

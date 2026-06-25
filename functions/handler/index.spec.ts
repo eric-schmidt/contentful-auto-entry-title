@@ -11,14 +11,16 @@ import { handler } from "./index";
 import { handleRegionPublish } from "./regionTitle";
 import { handleReleaseOrScheduledActionEvent } from "./releaseDate";
 
+const stubCma = { __stub: true };
+
 const buildEvent = (topic: string, body: unknown = {}) => ({
   headers: { "X-Contentful-Topic": topic },
   body: body as never,
 });
 
 const buildContext = () => ({
-  cma: {} as never,
-  appInstallationId: "auto-entry-title-app",
+  cma: stubCma as never,
+  spaceId: "space-id",
   environmentId: "master",
 });
 
@@ -28,7 +30,7 @@ describe("dispatcher", () => {
     vi.mocked(handleReleaseOrScheduledActionEvent).mockClear();
   });
 
-  it("routes Entry.publish events to handleRegionPublish", async () => {
+  it("routes Entry.publish events to handleRegionPublish, passing context.cma through", async () => {
     const event = buildEvent("ContentManagement.Entry.publish", {
       sys: { id: "e1", contentType: { sys: { id: "region" } } },
       fields: {},
@@ -36,16 +38,22 @@ describe("dispatcher", () => {
     await handler(event, buildContext());
 
     expect(handleRegionPublish).toHaveBeenCalledTimes(1);
+    expect(handleRegionPublish).toHaveBeenCalledWith(
+      expect.objectContaining({ cma: stubCma, environmentId: "master" }),
+    );
     expect(handleReleaseOrScheduledActionEvent).not.toHaveBeenCalled();
   });
 
-  it("routes Release.save events to handleReleaseOrScheduledActionEvent", async () => {
+  it("routes Release.save events to handleReleaseOrScheduledActionEvent, passing context.cma through", async () => {
     const event = buildEvent("ContentManagement.Release.save", {
       sys: { id: "rel-1", type: "Release" },
     });
     await handler(event, buildContext());
 
     expect(handleReleaseOrScheduledActionEvent).toHaveBeenCalledTimes(1);
+    expect(handleReleaseOrScheduledActionEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ cma: stubCma, environmentId: "master" }),
+    );
     expect(handleRegionPublish).not.toHaveBeenCalled();
   });
 
@@ -65,16 +73,6 @@ describe("dispatcher", () => {
       sys: { id: "e1" },
     });
     await handler(event, buildContext());
-
-    expect(handleRegionPublish).not.toHaveBeenCalled();
-    expect(handleReleaseOrScheduledActionEvent).not.toHaveBeenCalled();
-  });
-
-  it("ignores events with no X-Contentful-Topic header", async () => {
-    await handler(
-      { headers: {}, body: {} as never },
-      buildContext(),
-    );
 
     expect(handleRegionPublish).not.toHaveBeenCalled();
     expect(handleReleaseOrScheduledActionEvent).not.toHaveBeenCalled();

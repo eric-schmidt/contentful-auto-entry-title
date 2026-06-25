@@ -9,7 +9,7 @@
       "path": "functions/handler/index.js",
       "entryFile": "functions/handler/index.ts",
       "accepts": ["appevent.handler"],
-      "allowNetworks": []
+      "allowNetworks": ["*.contentful.com"]
     }
   ]
 }
