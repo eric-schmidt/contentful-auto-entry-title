@@ -288,3 +288,41 @@ to find out more.
 ## Learn More
 
 [Read more](https://www.contentful.com/developers/docs/extensibility/app-framework/create-contentful-app/) and check out the video on how to use the CLI.
+
+## Future improvements
+
+### Eliminate the mount-time title flicker
+
+**Observed:** when opening an entry in the editor, the title field briefly shows intermediate values before settling on the correct final value (e.g., the description appears immediately, then the date prefix appears ~200ms later, then the region appears ~100ms after that).
+
+**Cause:** `Field.tsx` calls `recompute()` after every `emit()`. On mount, synchronous fragments (`staticString`, `contentType`, `fieldValue`) emit immediately, while async fragments (`publicationDate`, `referencedEntryTitle`) emit after their CMA lookups resolve. Each emit triggers a recompute, and each recompute writes a different intermediate string to the field.
+
+**Proposed fix:** defer the first `recompute()` until every fragment has emitted at least once. After that, behave as today.
+
+Sketch:
+
+```ts
+const seen = new Set<number>();
+const total = composition.fragments.length;
+
+const recompute = () => {
+  if (seen.size < total) return; // wait for all initial emits
+  const next = joinFragments(fragments, separator);
+  if (next !== sdk.field.getValue()) sdk.field.setValue(next);
+};
+
+const teardowns = composition.fragments.map((fragment, index) =>
+  fragment.subscribe({
+    sdk,
+    emit: (value) => {
+      fragments[index] = value;
+      seen.add(index);
+      recompute();
+    },
+  }),
+);
+```
+
+**Expected outcome:** on mount, zero intermediate writes; usually zero writes total, because the assembled value matches the persisted value (which the server-side function already wrote). Post-mount reactivity (description edits, region picks) is unchanged — every fragment has already emitted, so each subsequent emit triggers an immediate recompute and write.
+
+**Why not removing `subscribe` entirely:** the editor needs `subscribe` to emit the current value on mount so `recompute()` doesn't strip live values out of the persisted title. Without subscribe, the editor would actively erase the date and region on every entry open.
