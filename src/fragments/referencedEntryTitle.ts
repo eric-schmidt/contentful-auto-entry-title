@@ -1,3 +1,9 @@
+// Purpose: Fragment that emits the title(s) of entries linked from a
+// reference (or array-of-references) field on this entry, joined with "/".
+// Cross-entry renames are propagated by the function side via the
+// Entry.publish event subscription (see functions/handler/linkedEntryTitle.ts),
+// not by editor-side polling — the editor only reflects renames on reopen.
+
 import type { FragmentCmaClient, Fragment } from "./types";
 
 type Options = {

@@ -1,3 +1,8 @@
+// Purpose: Entry.publish branch of the dispatcher. When any entry is
+// published, find every entry that links to it (via `links_to_entry`) and
+// recompute their auto-titles. This is what makes a Brand/Region rename
+// flow out to every parent entry that references it.
+
 import type { EntryProps, PlainClientAPI } from "contentful-management";
 import { resolveDefaultLocale } from "../shared/findManagedTitleFieldId";
 import { recomputeTitleForEntries } from "../shared/recomputeTitleForEntries";

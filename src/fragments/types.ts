@@ -1,3 +1,9 @@
+// Purpose: Core contract for the title-composition system. A Fragment is the
+// unit of composition with two execution modes: `subscribe` (live in the
+// editor, push updates via `emit`) and `compute` (one-shot from CMA data in
+// the propagation Function). Both modes share the same emit-empty-on-failure
+// convention so the joiner can drop missing slots cleanly.
+
 import type { FieldAppSDK } from "@contentful/app-sdk";
 import type { PlainClientAPI } from "contentful-management";
 

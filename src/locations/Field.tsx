@@ -1,3 +1,9 @@
+// Purpose: The only mounted App SDK location. Drives the live composition:
+// instantiates every fragment's `subscribe` once, recomputes the joined
+// title on each emit, and writes back to `sdk.field` (skip on no-op). The
+// rendered SingleLineEditor is intentionally disabled — see the inline note
+// for why field-level perms are the only correct way to enforce read-only.
+
 import { useEffect } from "react";
 import { useSDK } from "@contentful/react-apps-toolkit";
 import { SingleLineEditor } from "@contentful/field-editor-single-line";

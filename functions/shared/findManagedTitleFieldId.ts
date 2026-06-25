@@ -1,3 +1,10 @@
+// Purpose: Two CMA-based lookups every recompute path needs:
+//   - find the field id on a given entry's content type whose editor
+//     interface is bound to this app (so we know which field to overwrite)
+//   - resolve the space's default locale code
+// The former is how the function avoids writing to entries that aren't
+// using this app despite the event subscription firing for all entries.
+
 import type { EntryProps, PlainClientAPI } from "contentful-management";
 
 // `__APP_DEFINITION_ID__` is inlined at build time by esbuild's `define` from

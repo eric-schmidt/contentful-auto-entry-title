@@ -1,3 +1,9 @@
+// Purpose: The shared per-parent recompute loop used by every dispatch
+// branch. Given a list of candidate entries, skip those not bound to this
+// app, run the editor-side `composition` against each, and PATCH the title
+// field (idempotent when the new title matches). Per-entry failures are
+// logged and swallowed so one bad entry can't block the rest of the batch.
+
 import type { EntryProps, PlainClientAPI } from "contentful-management";
 import { composition } from "../../src/fragments";
 import { composeTitle } from "../../src/fragments/compose";

@@ -1,3 +1,9 @@
+// Purpose: Release.*/ScheduledAction.* branch of the dispatcher. Determines
+// which release the event concerns, hydrates its current member list, and
+// recomputes each member entry's title so the `publicationDate` fragment
+// reflects the new schedule. Release.delete is the only branch that must
+// trust the event body for member ids (the release is already gone).
+
 import type { EntryProps, PlainClientAPI, ReleaseProps } from "contentful-management";
 import { resolveDefaultLocale } from "../shared/findManagedTitleFieldId";
 import { recomputeTitleForEntries } from "../shared/recomputeTitleForEntries";

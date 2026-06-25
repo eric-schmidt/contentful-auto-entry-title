@@ -1,3 +1,7 @@
+// Purpose: Pure joining logic shared by editor and Function paths. Empty
+// fragments are filtered BEFORE the separator is applied so a missing slot
+// (e.g. no scheduled date) doesn't leave a dangling " - " in the title.
+
 import type { FieldNameComposition, FragmentComputeContext } from "./types";
 
 export const joinFragments = (

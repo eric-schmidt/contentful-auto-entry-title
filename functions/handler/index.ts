@@ -1,3 +1,8 @@
+// Purpose: The single `appevent.handler` entry point declared in
+// contentful-app-manifest.json. Because Contentful caps an App Definition at
+// one app-event handler, this file is a topic dispatcher — it reads the
+// `X-Contentful-Topic` header and forwards to per-domain handlers.
+
 import type {
   EntryProps,
   PlainClientAPI,

@@ -1,3 +1,7 @@
+// Purpose: Fragment that emits the display name of the entry's content
+// type. Editor path reads the synchronous `sdk.contentType`; Function path
+// fetches via CMA and falls back to the content-type id on failure.
+
 import type { Fragment } from "./types";
 
 export const contentType = (): Fragment => ({

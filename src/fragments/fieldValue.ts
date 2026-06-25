@@ -1,3 +1,8 @@
+// Purpose: Fragment that emits the verbatim value of another short-text
+// field on this same entry. In the editor it subscribes to onValueChanged;
+// in the function it reads the persisted default-locale value. Non-string
+// field values coerce to "" rather than throwing.
+
 import type { Fragment } from "./types";
 
 type FieldValueOptions = {

@@ -1,3 +1,10 @@
+// Purpose: Fragment that prefixes the title with the formatted scheduled
+// date of any Launch Release the entry sits in (e.g. "Jul-04"). This is the
+// most complex fragment because it has to chase a two-hop CMA path
+// (entry → release → scheduled-action) AND tolerate Contentful's read-
+// after-write consistency window; the retry constants and singular
+// `entity.sys.id` filter below are both worked around here.
+
 import type { FragmentCmaClient, Fragment } from "./types";
 
 // Formats an ISO 8601 instant as `Mon-DD` in the supplied IANA timezone (or UTC
