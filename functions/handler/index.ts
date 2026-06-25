@@ -3,7 +3,7 @@ import type {
   PlainClientAPI,
   ReleaseProps,
 } from "contentful-management";
-import { handleRegionPublish } from "./regionTitle";
+import { handleLinkedEntryPublish } from "./linkedEntryTitle";
 import { handleReleaseOrScheduledActionEvent } from "./releaseDate";
 
 const ENTRY_PUBLISH_TOPIC = "ContentManagement.Entry.publish";
@@ -28,9 +28,10 @@ type FunctionContext = {
 
 // Single appevent.handler for the auto-entry-title app. A Contentful App
 // Definition supports only one App Event Subscription handler, so all topics
-// (Entry.publish for Region renames, Release.* + ScheduledAction.* for
-// schedule changes) target this dispatcher. The dispatcher inspects
-// `X-Contentful-Topic` and forwards to the appropriate per-domain module.
+// (Entry.publish for linked-entry rename propagation, Release.* +
+// ScheduledAction.* for Launch Release schedule changes) target this
+// dispatcher. The dispatcher inspects `X-Contentful-Topic` and forwards to
+// the appropriate per-domain module.
 export const handler = async (
   event: AppEvent,
   context: FunctionContext,
@@ -38,7 +39,7 @@ export const handler = async (
   const topic = event.headers["X-Contentful-Topic"] ?? "";
 
   if (topic === ENTRY_PUBLISH_TOPIC) {
-    await handleRegionPublish({
+    await handleLinkedEntryPublish({
       cma: context.cma,
       environmentId: context.environmentId,
       sourceEntry: event.body as EntryProps,

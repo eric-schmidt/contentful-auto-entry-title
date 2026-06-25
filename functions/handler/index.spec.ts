@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("./regionTitle", () => ({
-  handleRegionPublish: vi.fn(async () => {}),
+vi.mock("./linkedEntryTitle", () => ({
+  handleLinkedEntryPublish: vi.fn(async () => {}),
 }));
 vi.mock("./releaseDate", () => ({
   handleReleaseOrScheduledActionEvent: vi.fn(async () => {}),
 }));
 
 import { handler } from "./index";
-import { handleRegionPublish } from "./regionTitle";
+import { handleLinkedEntryPublish } from "./linkedEntryTitle";
 import { handleReleaseOrScheduledActionEvent } from "./releaseDate";
 
 const stubCma = { __stub: true };
@@ -26,19 +26,19 @@ const buildContext = () => ({
 
 describe("dispatcher", () => {
   beforeEach(() => {
-    vi.mocked(handleRegionPublish).mockClear();
+    vi.mocked(handleLinkedEntryPublish).mockClear();
     vi.mocked(handleReleaseOrScheduledActionEvent).mockClear();
   });
 
-  it("routes Entry.publish events to handleRegionPublish, passing context.cma through", async () => {
+  it("routes Entry.publish events to handleLinkedEntryPublish, passing context.cma through", async () => {
     const event = buildEvent("ContentManagement.Entry.publish", {
       sys: { id: "e1", contentType: { sys: { id: "region" } } },
       fields: {},
     });
     await handler(event, buildContext());
 
-    expect(handleRegionPublish).toHaveBeenCalledTimes(1);
-    expect(handleRegionPublish).toHaveBeenCalledWith(
+    expect(handleLinkedEntryPublish).toHaveBeenCalledTimes(1);
+    expect(handleLinkedEntryPublish).toHaveBeenCalledWith(
       expect.objectContaining({ cma: stubCma, environmentId: "master" }),
     );
     expect(handleReleaseOrScheduledActionEvent).not.toHaveBeenCalled();
@@ -54,7 +54,7 @@ describe("dispatcher", () => {
     expect(handleReleaseOrScheduledActionEvent).toHaveBeenCalledWith(
       expect.objectContaining({ cma: stubCma, environmentId: "master" }),
     );
-    expect(handleRegionPublish).not.toHaveBeenCalled();
+    expect(handleLinkedEntryPublish).not.toHaveBeenCalled();
   });
 
   it("routes ScheduledAction.create events to handleReleaseOrScheduledActionEvent", async () => {
@@ -65,7 +65,7 @@ describe("dispatcher", () => {
     await handler(event, buildContext());
 
     expect(handleReleaseOrScheduledActionEvent).toHaveBeenCalledTimes(1);
-    expect(handleRegionPublish).not.toHaveBeenCalled();
+    expect(handleLinkedEntryPublish).not.toHaveBeenCalled();
   });
 
   it("ignores topics outside the recognized set", async () => {
@@ -74,7 +74,7 @@ describe("dispatcher", () => {
     });
     await handler(event, buildContext());
 
-    expect(handleRegionPublish).not.toHaveBeenCalled();
+    expect(handleLinkedEntryPublish).not.toHaveBeenCalled();
     expect(handleReleaseOrScheduledActionEvent).not.toHaveBeenCalled();
   });
 });

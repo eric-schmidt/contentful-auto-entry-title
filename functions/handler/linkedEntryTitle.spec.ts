@@ -13,7 +13,7 @@ vi.mock("../../src/fragments/compose", () => ({
     fragments.filter((s) => s !== "").join(sep ?? ""),
 }));
 
-import { handleRegionPublish } from "./regionTitle";
+import { handleLinkedEntryPublish } from "./linkedEntryTitle";
 import { composeTitle } from "../../src/fragments/compose";
 
 const APP_DEF_ID = "test-app-def-id";
@@ -91,7 +91,7 @@ const buildArgs = (
   return { cma, environmentId: "master", patch };
 };
 
-describe("handleRegionPublish", () => {
+describe("handleLinkedEntryPublish", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -104,19 +104,9 @@ describe("handleRegionPublish", () => {
     warnSpy.mockRestore();
   });
 
-  it("ignores entries that aren't of type 'region'", async () => {
+  it("does nothing when no parent entries reference the published entry", async () => {
     const args = buildArgs([], {});
-    await handleRegionPublish({
-      cma: args.cma as never,
-      environmentId: args.environmentId,
-      sourceEntry: buildSourceEntry({ contentTypeId: "blogPost" }) as never,
-    });
-    expect(args.cma.entry.getMany).not.toHaveBeenCalled();
-  });
-
-  it("does nothing when no parent entries reference the region", async () => {
-    const args = buildArgs([], {});
-    await handleRegionPublish({
+    await handleLinkedEntryPublish({
       cma: args.cma as never,
       environmentId: args.environmentId,
       sourceEntry: buildSourceEntry() as never,
@@ -146,7 +136,7 @@ describe("handleRegionPublish", () => {
       campaign: { controls: [] },
     });
 
-    await handleRegionPublish({
+    await handleLinkedEntryPublish({
       cma: args.cma as never,
       environmentId: args.environmentId,
       sourceEntry: buildSourceEntry() as never,
@@ -184,7 +174,7 @@ describe("handleRegionPublish", () => {
       },
     });
 
-    await handleRegionPublish({
+    await handleLinkedEntryPublish({
       cma: args.cma as never,
       environmentId: args.environmentId,
       sourceEntry: buildSourceEntry() as never,
@@ -212,7 +202,7 @@ describe("handleRegionPublish", () => {
       },
     });
 
-    await handleRegionPublish({
+    await handleLinkedEntryPublish({
       cma: args.cma as never,
       environmentId: args.environmentId,
       sourceEntry: buildSourceEntry() as never,
@@ -276,7 +266,7 @@ describe("handleRegionPublish", () => {
       },
     };
 
-    await handleRegionPublish({
+    await handleLinkedEntryPublish({
       cma: cma as never,
       environmentId: "master",
       sourceEntry: buildSourceEntry() as never,
@@ -329,7 +319,7 @@ describe("handleRegionPublish", () => {
       },
     };
 
-    await handleRegionPublish({
+    await handleLinkedEntryPublish({
       cma: cma as never,
       environmentId: "master",
       sourceEntry: buildSourceEntry() as never,

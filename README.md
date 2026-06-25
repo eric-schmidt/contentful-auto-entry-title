@@ -40,7 +40,7 @@ Both behaviors are handled by a **single Contentful Function** — `autoEntryTit
 
 | Topic | Routes to | What it does |
 |---|---|---|
-| `ContentManagement.Entry.publish` | `functions/handler/regionTitle.ts` | If the published entry is a `region`, find every entry that references it via `links_to_entry` and recompute their titles. |
+| `ContentManagement.Entry.publish` | `functions/handler/linkedEntryTitle.ts` | Find every entry that references the published entry via `links_to_entry` and recompute their titles. This drives rename propagation for every `referencedEntryTitle` fragment (Region, Brand, etc.). |
 | `ContentManagement.Release.create` / `.save` / `.archive` / `.unarchive` | `functions/handler/releaseDate.ts` | Refetch the Release, iterate its entry members, recompute each title (the `publicationDate` fragment will look up the schedule). Archive drops the date prefix; unarchive re-adds it if the ScheduledAction survived. |
 | `ContentManagement.Release.delete` | `functions/handler/releaseDate.ts` | The release is gone by the time the event arrives, so we read the member list from the **event body's** `entities` array (no refetch possible). Recompute titles for those entries to drop the date prefix. |
 | `ContentManagement.ScheduledAction.create` / `.save` / `.delete` | `functions/handler/releaseDate.ts` | Same as Release.save, but only when `entity.sys.linkType === "Release"`. Schedule appears, changes, or disappears. |
@@ -70,14 +70,14 @@ Do this once, after the app has been uploaded and activated for the first time. 
 6. **Target**: choose **Function**, then select `autoEntryTitleHandler` as the **App event handler**. Leave the filter and transformation function slots empty.
 7. Save the subscription.
 
-There is no content-type filter at the subscription level — the dispatcher filters `Entry.publish` down to content type `region` and `ScheduledAction.*` down to Release-targeted actions inside the handler itself, so subscribing to all nine topics is correct and expected.
+There is no content-type filter at the subscription level — every `Entry.publish` event runs through `links_to_entry`, and `recomputeTitleForEntries` only writes to entries whose title field is bound to this app (matched via the editor interface). So unrelated content types incur a single index lookup at most. `ScheduledAction.*` events are filtered down to Release-targeted actions inside the handler. Subscribing to all nine topics is correct and expected.
 
 ### Verifying the subscription
 
 After saving:
 
 1. In the Events tab, confirm the subscription is listed with all six topics → `autoEntryTitleHandler` as the handler.
-2. **Region rename test:** in a sandbox space, create a `region` entry titled "EMEA", reference it from a parent entry. Confirm the parent's title fragment for the region shows "EMEA" (editor `subscribe` path, no function involvement). Close the parent. Rename the Region to "Europe" and publish it. Reopen the parent — its title should now reflect "Europe".
+2. **Linked-entry rename test (Region, Brand, or any other reference):** in a sandbox space, create an entry of a referenced content type (e.g., a `region` titled "EMEA"), reference it from a parent entry. Confirm the parent's title fragment shows "EMEA" (editor `subscribe` path, no function involvement). Close the parent. Rename the referenced entry to "Europe" and publish it. Reopen the parent — its title should now reflect "Europe". The same flow works for Brand references and any future `referencedEntryTitle` fragment.
 3. **Release schedule test:** create a Launch Release containing a managed entry, schedule it for some date. After the function runs, the entry's title should show the date prefix (e.g. `Jul-04 - …`). Reschedule, then unschedule — the title should update to the new date, then drop the date entirely.
 4. If either test fails, check the **Function logs** for `autoEntryTitleHandler` in the same Events tab — they'll surface the topic that fired and any per-parent errors.
 
@@ -140,7 +140,7 @@ For this app's customer-deployment shape (one bundle, one App Definition), optio
 #### Operational notes
 
 - **If you change which App Definition the bundle is built for**, rebuild and re-upload. The id is baked in.
-- **Tests** stub `globalThis.__APP_DEFINITION_ID__` in a `beforeAll` block (see `functions/handler/regionTitle.spec.ts`).
+- **Tests** stub `globalThis.__APP_DEFINITION_ID__` in a `beforeAll` block (see `functions/handler/linkedEntryTitle.spec.ts`).
 
 ## Publication date fragment (Releases & Scheduled Actions)
 
@@ -200,7 +200,7 @@ If you add a future fragment whose value comes from outside the entry (e.g., a C
 
 ### Setup
 
-Subscription wiring is documented above in **"Server-side title propagation (App Event Subscription)"** — a single subscription on `autoEntryTitleHandler` covers both Region renames and Release lifecycle events. The eight Release/ScheduledAction topics in this section are part of that single subscription's topic list.
+Subscription wiring is documented above in **"Server-side title propagation (App Event Subscription)"** — a single subscription on `autoEntryTitleHandler` covers both linked-entry rename propagation and Release lifecycle events. The eight Release/ScheduledAction topics in this section are part of that single subscription's topic list.
 
 ### Date format and timezone
 
@@ -213,7 +213,7 @@ This is documented because timezone semantics for "what calendar date is this sc
 The function will not loop on Release schedule events:
 
 - The dispatcher only routes `Release.*` and `ScheduledAction.*` topics into the schedule handler. Entry updates via `cma.entry.update` produce `Entry.save`, not `Release.save` or `ScheduledAction.*`, so writes from the schedule handler do not feed back into it.
-- The dispatcher's `Entry.publish` route is gated on content type `region`. Title rewrites on managed parents produce `Entry.save` (not `Entry.publish`), and even if they did publish, they wouldn't be of type `region`.
+- Title rewrites on managed parents produce `Entry.save`, not `Entry.publish`, so they don't re-enter the linked-entry rename path. Even if they did publish, `recomputeTitleForEntries` would skip them when the new title matches the current.
 - The idempotency guard (skip the CMA write when the new title matches the current) prevents redundant writes even if the same event re-fires.
 
 ### Shared utilities
@@ -221,7 +221,7 @@ The function will not loop on Release schedule events:
 The dispatcher and its per-domain modules use:
 
 - `functions/shared/findManagedTitleFieldId.ts` — locates the title field on a parent entry's editor interface that is bound to this app, returning `null` for unmanaged content types. Also exports `resolveDefaultLocale`.
-- `functions/shared/recomputeTitleForEntries.ts` — the per-parent loop: locate the managed title field, recompute via `composeTitle`, idempotency-skip, write as a draft. Both `regionTitle.ts` and `releaseDate.ts` end with a call to this helper.
+- `functions/shared/recomputeTitleForEntries.ts` — the per-parent loop: locate the managed title field, recompute via `composeTitle`, idempotency-skip, write as a draft. Both `linkedEntryTitle.ts` and `releaseDate.ts` end with a call to this helper.
 - `src/fragments/compose.ts` — `composeTitle` is the single source of truth for "what should this entry's title be right now."
 
 If you add a new dispatch route, follow the same shape: identify the affected entries, then call `recomputeTitleForEntries` with the list. Don't reimplement the per-parent loop or skip the idempotency guard — they're part of the contract.

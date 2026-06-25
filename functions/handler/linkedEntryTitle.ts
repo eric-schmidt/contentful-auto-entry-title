@@ -2,7 +2,6 @@ import type { EntryProps, PlainClientAPI } from "contentful-management";
 import { resolveDefaultLocale } from "../shared/findManagedTitleFieldId";
 import { recomputeTitleForEntries } from "../shared/recomputeTitleForEntries";
 
-const SOURCE_CONTENT_TYPE_ID = "region";
 const PAGE_SIZE = 100;
 
 type Args = {
@@ -28,16 +27,18 @@ const paginateLinksToEntry = async (
   return all;
 };
 
-// Handles `Entry.publish` events for entries of content type `region`.
-// Finds every entry that references the published Region and recomputes each
-// referencing entry's auto-generated title.
-export const handleRegionPublish = async ({
+// Handles `Entry.publish` events. Finds every entry that references the
+// published entry (via the CMA's `links_to_entry` index) and recomputes its
+// auto-generated title. This generalizes the original "Region rename"
+// propagation: any `referencedEntryTitle` fragment (Region, Brand, or future
+// linked-entry references) gets free rename propagation through this path
+// because `recomputeTitleForEntries` only writes to entries whose title field
+// is actually bound to this app.
+export const handleLinkedEntryPublish = async ({
   cma,
   environmentId,
   sourceEntry,
 }: Args): Promise<void> => {
-  if (sourceEntry.sys.contentType.sys.id !== SOURCE_CONTENT_TYPE_ID) return;
-
   const defaultLocale = await resolveDefaultLocale(cma);
   const referencingEntries = await paginateLinksToEntry(cma, sourceEntry.sys.id);
 
@@ -46,6 +47,6 @@ export const handleRegionPublish = async ({
     environmentId,
     defaultLocale,
     entries: referencingEntries,
-    context: "regionTitle",
+    context: "linkedEntryTitle",
   });
 };
