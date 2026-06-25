@@ -28,6 +28,13 @@ const buildScheduledFor = (
   scheduledFor,
 });
 
+// Active (non-archived) release mock. `findScheduledDateForEntry` filters out
+// any release whose sys.status isn't "active", so tests that expect a date
+// fragment must mock releases with this shape.
+const buildActiveRelease = (id: string) => ({
+  sys: { id, status: "active" },
+});
+
 describe("formatPublicationDate", () => {
   it("returns Mon-DD with leading-zero day", () => {
     expect(formatPublicationDate("2026-07-04T12:00:00Z")).toBe("Jul-04");
@@ -52,7 +59,7 @@ describe("formatPublicationDate", () => {
 describe("publicationDate", () => {
   describe("subscribe", () => {
     const buildSdk = (
-      releases: { items: { sys: { id: string } }[] },
+      releases: { items: { sys: { id: string; status?: string } }[] },
       scheduled: { items: ScheduledItem[] },
       ids: { entry?: string; environment?: string; environmentAlias?: string } = {},
     ) =>
@@ -90,7 +97,7 @@ describe("publicationDate", () => {
       const emit = mockEmitter();
       publicationDate().subscribe({
         sdk: buildSdk(
-          { items: [{ sys: { id: "rel-1" } }] },
+          { items: [buildActiveRelease("rel-1")] },
           {
             items: [
               buildScheduledFor("rel-1", { datetime: "2026-07-04T12:00:00Z" }),
@@ -105,13 +112,36 @@ describe("publicationDate", () => {
       expect(emit).toHaveBeenCalledExactlyOnceWith("Jul-04");
     });
 
+    it("emits empty string when the entry's release is archived (date prefix drops)", async () => {
+      // An archived release can still have a ScheduledAction with
+      // sys.status: "scheduled". The query-level + defensive filter on
+      // release.sys.status === "active" ensures we don't keep stamping the
+      // date prefix onto entries whose release was archived.
+      const emit = mockEmitter();
+      publicationDate().subscribe({
+        sdk: buildSdk(
+          { items: [{ sys: { id: "rel-1", status: "archived" } }] },
+          {
+            items: [
+              buildScheduledFor("rel-1", { datetime: "2026-07-04T12:00:00Z" }),
+            ],
+          },
+        ),
+        emit,
+      });
+
+      await flush();
+
+      expect(emit).toHaveBeenCalledExactlyOnceWith("");
+    });
+
     it("queries scheduled actions with entity.sys.id (singular) not [in]", async () => {
       const getMany = vi.fn(async () => ({ items: [] }));
       const sdk = {
         ids: { entry: "p1", environment: "master" },
         cma: {
           release: {
-            query: vi.fn(async () => ({ items: [{ sys: { id: "rel-1" } }] })),
+            query: vi.fn(async () => ({ items: [buildActiveRelease("rel-1")] })),
           },
           scheduledActions: { getMany },
         },
@@ -143,7 +173,7 @@ describe("publicationDate", () => {
       const emit = mockEmitter();
       publicationDate().subscribe({
         sdk: buildSdk(
-          { items: [{ sys: { id: "rel-our" } }] },
+          { items: [buildActiveRelease("rel-our")] },
           {
             items: [
               buildScheduledFor("rel-other", {
@@ -171,7 +201,7 @@ describe("publicationDate", () => {
         },
         cma: {
           release: {
-            query: vi.fn(async () => ({ items: [{ sys: { id: "rel-1" } }] })),
+            query: vi.fn(async () => ({ items: [buildActiveRelease("rel-1")] })),
           },
           scheduledActions: { getMany },
         },
@@ -224,7 +254,7 @@ describe("publicationDate", () => {
 
   describe("compute", () => {
     const buildCma = (
-      releases: { items: { sys: { id: string } }[] },
+      releases: { items: { sys: { id: string; status?: string } }[] },
       scheduled: { items: ScheduledItem[] },
     ) =>
       ({
@@ -254,7 +284,7 @@ describe("publicationDate", () => {
 
     it("returns empty string when releases have no scheduled action", async () => {
       const cma = buildCma(
-        { items: [{ sys: { id: "rel-1" } }] },
+        { items: [buildActiveRelease("rel-1")] },
         { items: [] },
       );
       const promise = publicationDate().compute({
@@ -271,7 +301,7 @@ describe("publicationDate", () => {
 
     it("returns the formatted date when a scheduled action exists", async () => {
       const cma = buildCma(
-        { items: [{ sys: { id: "rel-1" } }] },
+        { items: [buildActiveRelease("rel-1")] },
         {
           items: [
             buildScheduledFor("rel-1", { datetime: "2026-07-04T12:00:00Z" }),
@@ -292,7 +322,7 @@ describe("publicationDate", () => {
 
     it("respects the scheduledFor timezone", async () => {
       const cma = buildCma(
-        { items: [{ sys: { id: "rel-1" } }] },
+        { items: [buildActiveRelease("rel-1")] },
         {
           items: [
             buildScheduledFor("rel-1", {
@@ -317,7 +347,7 @@ describe("publicationDate", () => {
     it("picks the earliest scheduled date when multiple releases are scheduled", async () => {
       const cma = buildCma(
         {
-          items: [{ sys: { id: "rel-1" } }, { sys: { id: "rel-2" } }],
+          items: [buildActiveRelease("rel-1"), buildActiveRelease("rel-2")],
         },
         {
           items: [
@@ -340,7 +370,7 @@ describe("publicationDate", () => {
 
     it("ignores returned items that target a different release", async () => {
       const cma = buildCma(
-        { items: [{ sys: { id: "rel-our" } }] },
+        { items: [buildActiveRelease("rel-our")] },
         {
           items: [
             buildScheduledFor("rel-other", { datetime: "2026-06-26T12:00:00Z" }),

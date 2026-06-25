@@ -69,15 +69,24 @@ const findScheduledDateForEntry = async (
   entryId: string,
   environmentId: string,
 ): Promise<string> => {
+  // Restrict to active (non-archived) releases. Archived releases can still
+  // have an attached ScheduledAction with `sys.status: "scheduled"`, so
+  // without this filter the date prefix would persist on entries whose
+  // release was archived. The defensive client-side filter below guards
+  // against any future query-parser regression silently widening the result.
   const releases = await cma.release.query({
     query: {
       "entities.sys.id[in]": entryId,
       "entities.sys.linkType": "Entry",
+      "sys.status[in]": "active",
     },
   });
-  if (!releases.items.length) return "";
+  const activeReleases = releases.items.filter(
+    (r) => (r.sys as { status?: string } | undefined)?.status === "active",
+  );
+  if (!activeReleases.length) return "";
 
-  const releaseIds = releases.items.map((r) => r.sys.id);
+  const releaseIds = activeReleases.map((r) => r.sys.id);
 
   let filteredItems: ScheduledActionItem[] = [];
   for (const delay of SCHEDULE_LOOKUP_RETRY_DELAYS_MS) {

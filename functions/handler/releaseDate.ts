@@ -4,10 +4,11 @@ import { recomputeTitleForEntries } from "../shared/recomputeTitleForEntries";
 
 const RELEASE_TOPIC_PREFIX = "ContentManagement.Release.";
 const SCHEDULED_ACTION_TOPIC_PREFIX = "ContentManagement.ScheduledAction.";
+const RELEASE_DELETE_TOPIC = "ContentManagement.Release.delete";
 
-// Backoff schedule for retrying the release fetch. `Release.save` events can
-// fire before the corresponding release-side write is fully queryable; a
-// short retry covers that window. Max wait ~3.75s total.
+// Backoff schedule for retrying the release fetch. Release.save / archive
+// events can fire before the new release-side state is fully queryable; a
+// short retry covers that consistency window. Max wait ~3.75s total.
 const RELEASE_FETCH_RETRY_DELAYS_MS = [0, 250, 500, 1000, 2000];
 
 type ScheduledActionEventBody = {
@@ -21,6 +22,8 @@ type Args = {
   topic: string;
   body: ReleaseProps | ScheduledActionEventBody;
 };
+
+type EntryLink = { sys: { type: "Link"; linkType: "Entry"; id: string } };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -39,10 +42,16 @@ const resolveReleaseId = (
   return null;
 };
 
+const extractEntryLinks = (release: ReleaseProps): EntryLink[] =>
+  ((release.entities?.items ?? []) as EntryLink[]).filter(
+    (link) => link.sys.linkType === "Entry",
+  );
+
 // Fetch the release with retries, returning the first response that has at
 // least one Entry member. The release entity can be served back without its
-// new membership immediately after a Release.save event — this retry bridges
-// that consistency window. Returns null if the release no longer exists.
+// new membership immediately after Release.save / Release.archive — this
+// retry bridges that consistency window. Returns null if the release no
+// longer exists (e.g., already deleted).
 const safeReleaseGetWithMembers = async (
   cma: PlainClientAPI,
   releaseId: string,
@@ -57,17 +66,21 @@ const safeReleaseGetWithMembers = async (
       return null;
     }
     lastResponse = release;
-    const entryCount = (release.entities?.items ?? []).filter(
-      (link) => link.sys.linkType === "Entry",
-    ).length;
-    if (entryCount > 0) return release;
+    if (extractEntryLinks(release).length > 0) return release;
   }
   return lastResponse;
 };
 
-// Handles Release.* and ScheduledAction.* events. For ScheduledAction events
-// whose target isn't a Release, this is a no-op. For everything else, fetches
-// the affected Release and recomputes the title of each entry member.
+// Handles Release.* and ScheduledAction.* events. Drives a recompute of each
+// affected entry's auto-generated title.
+//
+// Member resolution:
+//   - For Release.delete: the release is gone, so we MUST rely on the event
+//     body's entities array — there's no post-delete fetch.
+//   - For Release.archive / save / create: we refetch via cma.release.get
+//     (with retries to cover the release-side consistency window). Archived
+//     releases stay queryable.
+//   - For ScheduledAction.* events: we refetch the release the action targets.
 export const handleReleaseOrScheduledActionEvent = async ({
   cma,
   environmentId,
@@ -77,13 +90,24 @@ export const handleReleaseOrScheduledActionEvent = async ({
   const releaseId = resolveReleaseId(topic, body);
   if (!releaseId) return;
 
-  const release = await safeReleaseGetWithMembers(cma, releaseId);
-  if (!release) return;
+  let entryLinks: EntryLink[];
 
-  const entryLinks = (release.entities?.items ?? []).filter(
-    (link) => link.sys.linkType === "Entry",
-  );
-  if (!entryLinks.length) return;
+  if (topic === RELEASE_DELETE_TOPIC) {
+    // The release no longer exists. Use the entities the event body delivered.
+    const deletedRelease = body as ReleaseProps;
+    entryLinks = extractEntryLinks(deletedRelease);
+    if (!entryLinks.length) {
+      console.warn(
+        `[auto-entry-title] releaseDate: Release.delete payload had no Entry members; the deleted release "${releaseId}" left orphan dates on its former member entries.`,
+      );
+      return;
+    }
+  } else {
+    const release = await safeReleaseGetWithMembers(cma, releaseId);
+    if (!release) return;
+    entryLinks = extractEntryLinks(release);
+    if (!entryLinks.length) return;
+  }
 
   const defaultLocale = await resolveDefaultLocale(cma);
 

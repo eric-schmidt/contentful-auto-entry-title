@@ -41,8 +41,9 @@ Both behaviors are handled by a **single Contentful Function** — `autoEntryTit
 | Topic | Routes to | What it does |
 |---|---|---|
 | `ContentManagement.Entry.publish` | `functions/handler/regionTitle.ts` | If the published entry is a `region`, find every entry that references it via `links_to_entry` and recompute their titles. |
-| `ContentManagement.Release.create` / `.save` | `functions/handler/releaseDate.ts` | Fetch the Release, iterate its entry members, recompute each title (the `publicationDate` fragment will look up the schedule). |
-| `ContentManagement.ScheduledAction.create` / `.save` / `.delete` | `functions/handler/releaseDate.ts` | Same as above, but only when `entity.sys.linkType === "Release"`. Schedule appears, changes, or disappears. |
+| `ContentManagement.Release.create` / `.save` / `.archive` / `.unarchive` | `functions/handler/releaseDate.ts` | Refetch the Release, iterate its entry members, recompute each title (the `publicationDate` fragment will look up the schedule). Archive drops the date prefix; unarchive re-adds it if the ScheduledAction survived. |
+| `ContentManagement.Release.delete` | `functions/handler/releaseDate.ts` | The release is gone by the time the event arrives, so we read the member list from the **event body's** `entities` array (no refetch possible). Recompute titles for those entries to drop the date prefix. |
+| `ContentManagement.ScheduledAction.create` / `.save` / `.delete` | `functions/handler/releaseDate.ts` | Same as Release.save, but only when `entity.sys.linkType === "Release"`. Schedule appears, changes, or disappears. |
 
 For each managed parent, the dispatch path: locate the title field bound to this app via the entry's editor interface → recompute via `composeTitle` (the same composition the editor uses) → idempotency-skip if the new title matches the current → otherwise update the entry as a draft.
 
@@ -56,17 +57,20 @@ Do this once, after the app has been uploaded and activated for the first time. 
 2. Open **Org Settings → Apps → [the "Auto Entry Title" app definition]**.
 3. Open the **Events** tab.
 4. Click **Create event subscription** (or "Add subscription" — wording varies).
-5. **Topics**: enable all six —
+5. **Topics**: enable all nine —
    - `Entry.publish`
    - `Release.create`
    - `Release.save`
+   - `Release.archive`
+   - `Release.unarchive`
+   - `Release.delete`
    - `ScheduledAction.create`
    - `ScheduledAction.save`
    - `ScheduledAction.delete`
 6. **Target**: choose **Function**, then select `autoEntryTitleHandler` as the **App event handler**. Leave the filter and transformation function slots empty.
 7. Save the subscription.
 
-There is no content-type filter at the subscription level — the dispatcher filters `Entry.publish` down to content type `region` and `ScheduledAction.*` down to Release-targeted actions inside the handler itself, so subscribing to all six topics is correct and expected.
+There is no content-type filter at the subscription level — the dispatcher filters `Entry.publish` down to content type `region` and `ScheduledAction.*` down to Release-targeted actions inside the handler itself, so subscribing to all nine topics is correct and expected.
 
 ### Verifying the subscription
 
@@ -169,19 +173,26 @@ There are **two separate Contentful entities** at play, and conflating them is t
 
 **Critical implication:** rescheduling, unscheduling, and "is this Release scheduled?" all operate on the ScheduledAction, NOT on the Release entity. Calling `release.update` does not change a Release's schedule.
 
-### The four state transitions and the events that signal them
+### State transitions and the events that signal them
 
 | Transition | Triggering event(s) |
 |---|---|
-| Entry added to / removed from a Release | `Release.save` |
+| Entry added to a Release | `Release.save` (recomputes all current members) |
+| Entry removed from a Release | `Release.save` — but see "Known limitation" below |
 | Release scheduled for the first time | `ScheduledAction.create` (`entity.sys.linkType === "Release"`) |
 | Release rescheduled | `ScheduledAction.save` (same filter) |
 | Release unscheduled (schedule canceled) | `ScheduledAction.delete` (same filter) |
-| Release deleted | NOT subscribed — see below |
+| Release archived | `Release.archive` — refetch the release (still queryable after archive) and recompute; date prefix drops because archived releases aren't actively scheduled |
+| Release unarchived | `Release.unarchive` — refetch and recompute; if a ScheduledAction is still attached, the date prefix is re-added |
+| Release deleted | `Release.delete` — read entities from the **event body** and recompute (release is gone, can't refetch) |
 
-### Why we do not subscribe to `Release.delete`
+### Known limitation: entry removed from a Release
 
-When a Release is deleted, its ScheduledAction is also deleted, and `ScheduledAction.delete` typically fires while the Release still exists. Our handler iterates the Release's current members at that point and drops the date. If a Release is hard-deleted before that event reaches us, we lose the membership list and cannot reliably clean up — this is an **accepted edge case**. Do **not** "fix" this by subscribing to `Release.delete`: that event fires after the membership list is already gone, so it gives us nothing actionable.
+When an editor removes a single entry from a Release (while keeping the Release itself), `Release.save` fires with the new (smaller) `entities` list. Contentful does **not** include a "previous membership" diff or the id of the removed entry on this event — and there's no CMA endpoint for release-membership history.
+
+As a result, the server-side function cannot identify which entry was just removed and will not actively drop the date prefix from its title.
+
+**The editor side covers this case naturally:** when an editor opens the removed entry, `publicationDate.subscribe` runs its CMA lookup fresh, finds no scheduled release for the entry, and writes a corrected title without the date prefix. So the entry's title self-heals on next open.
 
 ### Adding more fragments like this
 
@@ -189,7 +200,7 @@ If you add a future fragment whose value comes from outside the entry (e.g., a C
 
 ### Setup
 
-Subscription wiring is documented above in **"Server-side title propagation (App Event Subscription)"** — a single subscription on `autoEntryTitleHandler` covers both Region renames and Release schedule events. The five Release/ScheduledAction topics in this section are part of that single subscription's topic list.
+Subscription wiring is documented above in **"Server-side title propagation (App Event Subscription)"** — a single subscription on `autoEntryTitleHandler` covers both Region renames and Release lifecycle events. The eight Release/ScheduledAction topics in this section are part of that single subscription's topic list.
 
 ### Date format and timezone
 
