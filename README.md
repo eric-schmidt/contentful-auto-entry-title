@@ -31,6 +31,8 @@ A fragment is any object matching the `Fragment` signature in `src/fragments/typ
 
 ## Server-side title propagation (App Event Subscription)
 
+[Contentful App Events Documentation](https://www.contentful.com/developers/docs/extensibility/app-framework/app-events/)
+
 Some fragments derive their value from data outside the entry itself:
 
 - **`referencedEntryTitle`** — title of a referenced Region. When the Region is renamed while a parent entry is closed, the parent's title would otherwise go stale.
