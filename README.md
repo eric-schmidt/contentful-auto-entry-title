@@ -6,10 +6,6 @@ The main goal of this app is to automatically generate the value of an entry's t
 
 This app is intended for non-localized entry-title fields. The composed value is written via `sdk.field.setValue`, which targets the locale of the mounted field.
 
-## Deployment
-
-This app uses https://github.com/contentful/actions-app-deploy to automatically deploy to Contentful when changes are pushed up to GitHub. Configuration for this process can be found in the `.github/workflows/actions-app-deploy.yml` file.
-
 ## App/Content Type Configuration
 
 1. Install the app to your space, either via Contentful hosting or by cloning this repo and running `npm install` and `npm start` (hosted at http://localhost:3000).
