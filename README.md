@@ -6,24 +6,25 @@ The main goal of this app is to automatically generate the value of an entry's t
 
 This app is intended for non-localized entry-title fields. The composed value is written via `sdk.field.setValue`, which targets the locale of the mounted field.
 
-## App/Content Type Configuration
+## Local Setup
 
-1. Install the app to your space, either via Contentful hosting or by cloning this repo and running `npm install` and `npm start` (hosted at http://localhost:3000).
-2. Enable for Short Text entry fields (the only field type currently supported).
-3. Create a Short Text field on a content type and edit its appearance to use the Auto Entry Title widget.
+1. Clone down this repo.
+2. Ensure you are using a minimum of Node v22 (if using [NVM](https://github.com/nvm-sh/nvm) you can just run `nvm use` in the repo root).
+3. Run `npm run build` to create the build directory that can be uploaded to Contentful.
+4. You can run the *frontend* portion of this app locally using `npm run start`; however, the backend Functions have to be uploaded to Contentful in order to work properly (see next section).
 
-## Configuring naming behavior
+## App Definition Setup
+1. Navigate to your Contentful Organization overview and click on **Apps**.
+2. Click **Create app** on the top right.
+3. Add a **Title** and set the hosing URL to http://localhost:3000 for now (just so you can save the definition).
+4. Under **Locations**, select **Entry field** and the **Short text** field type.
+5. Click **Save** at the top right.
 
-Naming behavior is composed from an ordered list of fragments in `src/fragments/index.ts`. Edit the `composition` export to add, remove, or reorder fragments, then rebuild and redeploy:
+## Content Type Configuration
 
-```ts
-export const composition: FieldNameComposition = {
-  fragments: [staticString("Auto Title")],
-  separator: " - ",
-};
-```
-
-A fragment is any object matching the `Fragment` signature in `src/fragments/types.ts`. Its `subscribe` method receives the SDK plus an `emit(fragment)` callback, subscribes to whatever it needs, and returns a teardown that removes its listeners. `Field.tsx` joins each fragment's most-recent emitted value with the separator and writes the result to the field (skipping the write when the composed value already matches).
+1. Install the app to your chosen Space.
+2. Navigate to your content model and edit your chosen title field, applying your App Definition (see above) to the field's appearance.
+  - Note: This repo contains an example content model (`space-export.json`) that you can import into a blank Space to get a head start.
 
 ## Server-side title propagation (App Event Subscription)
 
@@ -36,7 +37,7 @@ Some fragments derive their value from data outside the entry itself:
 
 Both behaviors are handled by a **single Contentful Function** — `autoEntryTitleHandler` (declared in `contentful-app-manifest.json`, source in `functions/handler/index.ts`). A Contentful App Definition supports only **one** App Event handler function, so the function is a thin **dispatcher** that inspects the incoming `X-Contentful-Topic` header and routes to per-domain modules:
 
-| Topic | Routes to | What it does |
+| Topic (Content Event) | Routes to | What it does |
 |---|---|---|
 | `ContentManagement.Entry.publish` | `functions/handler/linkedEntryTitle.ts` | Find every entry that references the published entry via `links_to_entry` and recompute their titles. This drives rename propagation for every `referencedEntryTitle` fragment (Region, Brand, etc.). |
 | `ContentManagement.Release.create` / `.save` / `.archive` / `.unarchive` | `functions/handler/releaseDate.ts` | Refetch the Release, iterate its entry members, recompute each title (the `publicationDate` fragment will look up the schedule). Archive drops the date prefix; unarchive re-adds it if the ScheduledAction survived. |
@@ -54,8 +55,8 @@ Do this once, after the app has been uploaded and activated for the first time. 
 1. In the Contentful web app, switch to the organization that owns this App Definition.
 2. Open **Org Settings → Apps → [the "Auto Entry Title" app definition]**.
 3. Open the **Events** tab.
-4. Click **Create event subscription** (or "Add subscription" — wording varies).
-5. **Topics**: enable all nine —
+4. **Target**: choose **Function**, then select `autoEntryTitleHandler` as the **App event handler**. Leave the filter and transformation function slots empty.
+5. **Content Events**: enable all nine:
    - `Entry.publish`
    - `Release.create`
    - `Release.save`
@@ -65,8 +66,7 @@ Do this once, after the app has been uploaded and activated for the first time. 
    - `ScheduledAction.create`
    - `ScheduledAction.save`
    - `ScheduledAction.delete`
-6. **Target**: choose **Function**, then select `autoEntryTitleHandler` as the **App event handler**. Leave the filter and transformation function slots empty.
-7. Save the subscription.
+6. Save the App Definition.
 
 There is no content-type filter at the subscription level — every `Entry.publish` event runs through `links_to_entry`, and `recomputeTitleForEntries` only writes to entries whose title field is bound to this app (matched via the editor interface). So unrelated content types incur a single index lookup at most. `ScheduledAction.*` events are filtered down to Release-targeted actions inside the handler. Subscribing to all nine topics is correct and expected.
 
@@ -77,7 +77,7 @@ After saving:
 1. In the Events tab, confirm the subscription is listed with all six topics → `autoEntryTitleHandler` as the handler.
 2. **Linked-entry rename test (Region, Brand, or any other reference):** in a sandbox space, create an entry of a referenced content type (e.g., a `region` titled "EMEA"), reference it from a parent entry. Confirm the parent's title fragment shows "EMEA" (editor `subscribe` path, no function involvement). Close the parent. Rename the referenced entry to "Europe" and publish it. Reopen the parent — its title should now reflect "Europe". The same flow works for Brand references and any future `referencedEntryTitle` fragment.
 3. **Release schedule test:** create a Launch Release containing a managed entry, schedule it for some date. After the function runs, the entry's title should show the date prefix (e.g. `Jul-04 - …`). Reschedule, then unschedule — the title should update to the new date, then drop the date entirely.
-4. If either test fails, check the **Function logs** for `autoEntryTitleHandler` in the same Events tab — they'll surface the topic that fired and any per-parent errors.
+4. If either test fails, check the **Function logs** on the **Functions** tab for `autoEntryTitleHandler`. These logs will surface the topic that fired and any per-parent errors.
 
 ### Re-running / changing the subscription
 
@@ -140,6 +140,19 @@ For this app's customer-deployment shape (one bundle, one App Definition), optio
 - **If you change which App Definition the bundle is built for**, rebuild and re-upload. The id is baked in.
 - **Tests** stub `globalThis.__APP_DEFINITION_ID__` in a `beforeAll` block (see `functions/handler/linkedEntryTitle.spec.ts`).
 
+## Configuring naming behavior
+
+Naming behavior is composed from an ordered list of fragments in `src/fragments/index.ts`. Edit the `composition` export to add, remove, or reorder fragments, then rebuild and redeploy:
+
+```ts
+export const composition: FieldNameComposition = {
+  fragments: [staticString("Auto Title")],
+  separator: " - ",
+};
+```
+
+A fragment is any object matching the `Fragment` signature in `src/fragments/types.ts`. Its `subscribe` method receives the SDK plus an `emit(fragment)` callback, subscribes to whatever it needs, and returns a teardown that removes its listeners. `Field.tsx` joins each fragment's most-recent emitted value with the separator and writes the result to the field (skipping the write when the composed value already matches).
+
 ## Publication date fragment (Releases & Scheduled Actions)
 
 This is the most architecturally nuanced piece of the app. If you are extending or debugging the publication-date behavior, read this section in full before changing any code in `src/fragments/publicationDate.ts` or `functions/handler/releaseDate.ts`.
@@ -183,14 +196,6 @@ There are **two separate Contentful entities** at play, and conflating them is t
 | Release archived | `Release.archive` — refetch the release (still queryable after archive) and recompute; date prefix drops because archived releases aren't actively scheduled |
 | Release unarchived | `Release.unarchive` — refetch and recompute; if a ScheduledAction is still attached, the date prefix is re-added |
 | Release deleted | `Release.delete` — read entities from the **event body** and recompute (release is gone, can't refetch) |
-
-### Known limitation: entry removed from a Release
-
-When an editor removes a single entry from a Release (while keeping the Release itself), `Release.save` fires with the new (smaller) `entities` list. Contentful does **not** include a "previous membership" diff or the id of the removed entry on this event — and there's no CMA endpoint for release-membership history.
-
-As a result, the server-side function cannot identify which entry was just removed and will not actively drop the date prefix from its title.
-
-**The editor side covers this case naturally:** when an editor opens the removed entry, `publicationDate.subscribe` runs its CMA lookup fresh, finds no scheduled release for the entry, and writes a corrected title without the date prefix. So the entry's title self-heals on next open.
 
 ### Adding more fragments like this
 
