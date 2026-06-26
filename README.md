@@ -31,7 +31,7 @@ This app is intended for non-localized entry-title fields. The composed value is
 2. Navigate to your content model and edit your chosen title field, applying your App Definition (see above) to the field's appearance.
   - Note: This repo contains an example content model (`space-export.json`) that you can import into a blank Space to get a head start.
 
-## Server-side title propagation (App Event Subscription)
+## Configuration for server-side propagation (App Events)
 
 [Contentful App Events Documentation](https://www.contentful.com/developers/docs/extensibility/app-framework/app-events/)
 
