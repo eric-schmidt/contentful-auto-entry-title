@@ -1,4 +1,4 @@
-This project was bootstrapped with [Create Contentful App](https://github.com/contentful/create-contentful-app).
+# Auto Entry Title
 
 ## Overview
 
