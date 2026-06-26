@@ -10,8 +10,9 @@ This app is intended for non-localized entry-title fields. The composed value is
 
 1. Clone down this repo.
 2. Ensure you are using a minimum of Node v22 (if using [NVM](https://github.com/nvm-sh/nvm) you can just run `nvm use` in the repo root).
-3. Run `npm run build` to create the build directory that can be uploaded to Contentful.
-4. You can run the *frontend* portion of this app locally using `npm run start`; however, the backend Functions have to be uploaded to Contentful in order to work properly (see next section).
+3. Run `npm install` to install dependencies.
+4. Run `npm run build` to create the build directory that can be uploaded to Contentful.
+5. You can run the *frontend* portion of this app locally using `npm run start`; however, the backend Functions have to be uploaded to Contentful in order to work properly (see next section).
 
 ## App Definition Setup
 1. Navigate to your Contentful Organization overview and click on **Apps**.
@@ -19,6 +20,10 @@ This app is intended for non-localized entry-title fields. The composed value is
 3. Add a **Title** and set the hosing URL to http://localhost:3000 for now (just so you can save the definition).
 4. Under **Locations**, select **Entry field** and the **Short text** field type.
 5. Click **Save** at the top right.
+
+## Uploading a bundle to Contentful
+1. Once the App Definition has been created above, in the root directory for this repo, copy `.env.example` to `.env` and fill in the values. You can get the App Definition ID from the config screen above.
+2. Run `npm run build && npm run upload`, which will build the bundle and upload to Contentful in one simple step.
 
 ## Content Type Configuration
 
