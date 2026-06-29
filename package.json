@@ -24,7 +24,8 @@
     "create-app-definition": "contentful-app-scripts create-app-definition",
     "add-locations": "contentful-app-scripts add-locations",
     "upload": "contentful-app-scripts upload --bundle-dir ./build",
-    "upload-ci": "contentful-app-scripts upload --ci --bundle-dir ./build --organization-id $CONTENTFUL_ORG_ID --definition-id $CONTENTFUL_APP_DEF_ID --token $CONTENTFUL_ACCESS_TOKEN"
+    "upload-ci": "contentful-app-scripts upload --ci --bundle-dir ./build --organization-id $CONTENTFUL_ORG_ID --definition-id $CONTENTFUL_APP_DEF_ID --token $CONTENTFUL_ACCESS_TOKEN",
+    "import-content-model": "tsx --env-file=.env scripts/import-content-model.mts"
   },
   "eslintConfig": {
     "extends": "react-app"
@@ -49,8 +50,10 @@
     "@types/react": "18.3.13",
     "@types/react-dom": "18.3.1",
     "@vitejs/plugin-react": "^4.0.3",
+    "contentful-import": "^10.0.11",
     "cross-env": "7.0.3",
     "jsdom": "^26.0.0",
+    "tsx": "^4.19.2",
     "typescript": "4.9.5",
     "vite": "^6.2.2",
     "vitest": "^3.0.9"

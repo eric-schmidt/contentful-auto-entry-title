@@ -25,11 +25,20 @@ This app is intended for non-localized entry-title fields. The composed value is
 1. Once the App Definition has been created above, in the root directory for this repo, copy `.env.example` to `.env` and fill in the values. You can get the App Definition ID from the config screen above.
 2. Run `npm run build && npm run upload`, which will build the bundle and upload to Contentful in one simple step.
 
+## Importing a Space Export
+
+1. Drop one or more `contentful space export` JSON dumps in `exports/space/`. This repo ships with `exports/space/space-export.json` as a ready-to-use example content model.
+2. Make sure the target space is blank — `contentful-import` is idempotent by entity `sys.id`, so re-running against a populated space *updates* matching entities in place rather than failing.
+3. Run `npm run import-content-model`. The script lists every `.json` in `exports/space/` and (if there's more than one) asks which to use; then prompts for space ID, environment ID, and a y/N confirm. Pass `--yes` to skip the confirm in scripted environments.
+4. The chosen export is sent through `contentful-import` in full — content types, editor interfaces, locales, tags, entries, and assets (with binaries). CMA errors are surfaced verbatim, including a `details:` block with the underlying response.
+
+The token is read from `CONTENTFUL_ACCESS_TOKEN` in `.env` at the repo root (the same token `npm run upload-ci` uses). Space and environment IDs are prompted for each run rather than read from `.env` — they change per environment.
+
 ## Content Type Configuration
 
 1. Install the app to your chosen Space.
 2. Navigate to your content model and edit your chosen title field, applying your App Definition (see above) to the field's appearance.
-  - Note: This repo contains an example content model (`space-export.json`) that you can import into a blank Space to get a head start.
+  - Note: This repo contains an example content model (`exports/space/space-export.json`) that you can import into a blank Space to get a head start (see "Importing a Space Export" above).
 
 ## Configuration for server-side propagation (App Events)
 
@@ -271,6 +280,10 @@ For this command to work, the following environment variables must be set:
 - `CONTENTFUL_ORG_ID` - The ID of your organization
 - `CONTENTFUL_APP_DEF_ID` - The ID of the app to which to add the bundle
 - `CONTENTFUL_ACCESS_TOKEN` - A personal [access token](https://www.contentful.com/developers/docs/references/content-management-api/#/reference/personal-access-tokens)
+
+#### `npm run import-content-model`
+
+Picks a `.json` export from `exports/space/` (auto-selects if only one, prompts otherwise) and imports it in full — content types, editor interfaces, locales, tags, entries, assets — via `contentful-import`. Prompts for space ID, environment ID, and a y/N confirm (`--yes` skips); reads `CONTENTFUL_ACCESS_TOKEN` from `.env`. Idempotent by `sys.id` — existing entities are updated, not failed. CMA errors surface with a `details:` block.
 
 ## Libraries to use
 
