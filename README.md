@@ -70,7 +70,7 @@ Do this once, after the app has been uploaded and activated for the first time. 
 2. Open **Org Settings → Apps → [the "Auto Entry Title" app definition]**.
 3. Open the **Events** tab.
 4. **Target**: choose **Function**, then select `autoEntryTitleHandler` as the **App event handler**. Leave the filter and transformation function slots empty.
-5. **Content Events**: enable all nine:
+5. **Content Events**: enable all of the following:
    - `Entry.publish`
    - `Release.create`
    - `Release.save`
@@ -217,7 +217,7 @@ If you add a future fragment whose value comes from outside the entry (e.g., a C
 
 ### Setup
 
-Subscription wiring is documented above in **"Server-side title propagation (App Event Subscription)"** — a single subscription on `autoEntryTitleHandler` covers both linked-entry rename propagation and Release lifecycle events. The eight Release/ScheduledAction topics in this section are part of that single subscription's topic list.
+Subscription wiring is documented above in **"Server-side title propagation (App Event Subscription)"** — a single subscription on `autoEntryTitleHandler` covers both linked-entry rename propagation and Release lifecycle events. The Release/ScheduledAction topics in this section are part of that single subscription's topic list.
 
 ### Date format and timezone
 

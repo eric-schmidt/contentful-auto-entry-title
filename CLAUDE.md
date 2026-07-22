@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Contentful App Framework field editor (React + Vite + TypeScript) that auto-generates entry titles by composing ordered fragments. Server-side propagation of cross-entry renames and release-schedule changes runs as a Contentful Function (`functions/handler/`).
 
-Node version is pinned to v22 in `.nvmrc`. The CI workflow currently hardcodes Node 16.x — flag this if you touch the workflow.
+Node version is pinned to v22 in `.nvmrc`.
 
 ## Commands
 
@@ -46,10 +46,6 @@ When a non-obvious question comes up, the answer usually lives in a doc comment 
 ## Editor-side staleness
 
 The `publicationDate` fragment caches CMA lookups in-memory. If a Release is scheduled in another tab, the editor won't reflect it until the entry is reopened. The server-side function corrects this on next save. Don't add retry/refresh logic in the editor to "fix" this — it's intentional, and the server-side path is authoritative.
-
-## Known limitation worth preserving
-
-Removing an entry from a Release is not detected by the event subscription (no diff in `Release.save`). The title self-heals when the entry is reopened. Don't paper over this with editor-side polling.
 
 ## Fragment authoring contract
 
