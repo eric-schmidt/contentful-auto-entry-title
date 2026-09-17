@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("./linkedEntryTitle", () => ({
   handleLinkedEntryPublish: vi.fn(async () => {}),
@@ -10,6 +10,7 @@ vi.mock("./releaseDate", () => ({
 import { handler } from "./index";
 import { handleLinkedEntryPublish } from "./linkedEntryTitle";
 import { handleReleaseOrScheduledActionEvent } from "./releaseDate";
+import type { ConceptReader } from "../../src/fragments/types";
 
 const stubCma = { __stub: true };
 
@@ -35,10 +36,29 @@ const withDeliveryKey = (key: string | null) => {
   vi.stubGlobal("__DELIVERY_KEY__", key);
 };
 
+// Pulls the reader the dispatcher actually forwarded off a mocked branch, so a
+// test can exercise it rather than merely assert `expect.any(Function)`.
+const forwardedReader = (
+  branch:
+    | typeof handleLinkedEntryPublish
+    | typeof handleReleaseOrScheduledActionEvent,
+) => {
+  const args = vi.mocked(branch).mock.calls.at(-1)?.[0];
+  return (args as { conceptReader?: ConceptReader } | undefined)?.conceptReader;
+};
+
 describe("dispatcher", () => {
   beforeEach(() => {
     vi.mocked(handleLinkedEntryPublish).mockClear();
     vi.mocked(handleReleaseOrScheduledActionEvent).mockClear();
+  });
+
+  // `withDeliveryKey` stubs a global and nothing restored it, so tests that
+  // must run without a key only passed while they happened to be declared
+  // before the first stubbing test.
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("routes Entry.publish events to handleLinkedEntryPublish, passing context.cma through", async () => {
@@ -83,28 +103,53 @@ describe("dispatcher", () => {
   // includes `conceptNotation` — a branch that forgot to forward a reader would
   // silently strip the notation blob out of each title it rewrote, and nothing
   // else in the suite would notice.
+  //
+  // So the reader is invoked, not just type-checked: it must be wired to the
+  // right space, environment and key. One built against the wrong environment
+  // 404s on every read (the key is authorized per environment), which degrades
+  // identically to a missing reader from a completely different cause.
   it("forwards a concept reader built from the inlined delivery key on both branches", async () => {
     withDeliveryKey("delivery-key");
-    await handler(
-      buildEvent("ContentManagement.Entry.publish", {
-        sys: { id: "e1", contentType: { sys: { id: "pdpPage" } } },
-        fields: {},
-      }),
-      buildContext(),
-    );
-    expect(handleLinkedEntryPublish).toHaveBeenCalledWith(
-      expect.objectContaining({ conceptReader: expect.any(Function) }),
-    );
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ items: [] }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
 
-    await handler(
-      buildEvent("ContentManagement.Release.save", {
-        sys: { id: "rel-1", type: "Release" },
-      }),
-      buildContext(),
-    );
-    expect(handleReleaseOrScheduledActionEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ conceptReader: expect.any(Function) }),
-    );
+    for (const [event, branch] of [
+      [
+        buildEvent("ContentManagement.Entry.publish", {
+          sys: { id: "e1", contentType: { sys: { id: "pdpPage" } } },
+          fields: {},
+        }),
+        handleLinkedEntryPublish,
+      ],
+      [
+        buildEvent("ContentManagement.Release.save", {
+          sys: { id: "rel-1", type: "Release" },
+        }),
+        handleReleaseOrScheduledActionEvent,
+      ],
+    ] as const) {
+      fetchMock.mockClear();
+      await handler(event, buildContext());
+
+      const reader = forwardedReader(branch);
+      expect(reader).toBeTypeOf("function");
+
+      await reader!("division");
+
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [
+        string,
+        { headers: Record<string, string> },
+      ];
+      expect(url).toContain(
+        "/spaces/space-id/environments/master/taxonomy/concepts",
+      );
+      expect(url).toContain("conceptScheme=division");
+      expect(init.headers.Authorization).toBe("Bearer delivery-key");
+    }
   });
 
   it("warns and forwards no reader when no delivery key was inlined", async () => {

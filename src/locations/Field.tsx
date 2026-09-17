@@ -19,7 +19,8 @@ import type { ConceptReader } from "../fragments/types";
 // same entry twice to be free. Keyed by space+environment so a dev session that
 // switches environments doesn't serve the wrong org's concepts. Never
 // invalidated for the session — the deliberate staleness policy documented in
-// CLAUDE.md; the server-side path is authoritative.
+// AGENTS.md "Editor-side staleness" and docs/title-composition.md; the
+// server-side path is authoritative.
 const conceptReaders = new Map<string, ConceptReader | undefined>();
 
 const conceptReaderFor = (sdk: FieldAppSDK): ConceptReader | undefined => {
@@ -27,8 +28,10 @@ const conceptReaderFor = (sdk: FieldAppSDK): ConceptReader | undefined => {
   if (conceptReaders.has(key)) return conceptReaders.get(key);
 
   const base = createBrowserConceptReader(sdk);
-  // May be undefined when no key was built in; `conceptNotation` warns and
-  // emits "" in that case. Cached either way so the warning fires once.
+  // May be undefined when no key was built in; `conceptNotation` then warns and
+  // returns `null` — "could not find out" — so the whole title is withheld and
+  // the stored one is left alone. It does NOT emit "": that would persist a
+  // title missing its notation. Cached either way so the warning fires once.
   const reader = base ? withConceptCache(base) : undefined;
   conceptReaders.set(key, reader);
   return reader;
@@ -86,11 +89,7 @@ const Field = () => {
   // marked as the title. Use field-level perms to mark this field read-only
   // for relevant roles instead.
   return (
-    <SingleLineEditor
-      field={sdk.field}
-      locales={sdk.locales}
-      isDisabled
-    />
+    <SingleLineEditor field={sdk.field} locales={sdk.locales} isDisabled />
   );
 };
 

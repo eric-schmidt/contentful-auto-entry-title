@@ -14,14 +14,15 @@
 // to publish again to make it live. Republishing programmatically was
 // considered and rejected: it would make this the only path in the repo that
 // publishes, which is the invariant the whole recursion-safety argument rests
-// on (see ./actions.ts and README.md "Recursion safety").
+// on (see ./actions.ts and docs/server-side-propagation.md "Recursion safety").
 
 import type { EntryProps, PlainClientAPI } from "contentful-management";
 import type { ConceptReader } from "../../src/fragments/types";
 import { resolveDefaultLocale } from "../shared/findManagedTitleFieldId";
+import { paginateEntries } from "../shared/paginateEntries";
 import { recomputeTitleForEntries } from "../shared/recomputeTitleForEntries";
 
-const PAGE_SIZE = 100;
+const CONTEXT = "linkedEntryTitle";
 
 type Args = {
   cma: PlainClientAPI;
@@ -30,23 +31,6 @@ type Args = {
   // in the handler for why it must not reach `composeTitle`.
   sourceEntry: EntryProps;
   conceptReader?: ConceptReader;
-};
-
-const paginateLinksToEntry = async (
-  cma: PlainClientAPI,
-  entryId: string,
-): Promise<EntryProps[]> => {
-  const all: EntryProps[] = [];
-  let skip = 0;
-  while (true) {
-    const page = await cma.entry.getMany({
-      query: { links_to_entry: entryId, skip, limit: PAGE_SIZE },
-    });
-    all.push(...(page.items as EntryProps[]));
-    skip += PAGE_SIZE;
-    if (skip >= page.total) break;
-  }
-  return all;
 };
 
 // Handles `Entry.publish` events. Recomputes the published entry's own title,
@@ -86,13 +70,17 @@ export const handleLinkedEntryPublish = async ({
   } catch (err) {
     // Isolated so a fetch failure costs only job 1, not the whole fan-out.
     console.warn(
-      `[auto-entry-title] linkedEntryTitle: failed to fetch the published ` +
+      `[auto-entry-title] ${CONTEXT}: failed to fetch the published ` +
         `entry "${sourceId}"; its own title was not recomputed.`,
       err,
     );
   }
 
-  const referencingEntries = await paginateLinksToEntry(cma, sourceId);
+  const referencingEntries = await paginateEntries(
+    cma,
+    { links_to_entry: sourceId },
+    CONTEXT,
+  );
 
   // Source FIRST, and deduped. Order matters: `referencedEntryTitle.compute`
   // reads its linked entry's draft title over the CMA, so patching the source
@@ -110,7 +98,7 @@ export const handleLinkedEntryPublish = async ({
     environmentId,
     defaultLocale,
     entries,
-    context: "linkedEntryTitle",
+    context: CONTEXT,
     conceptReader,
   });
 };

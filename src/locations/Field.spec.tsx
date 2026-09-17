@@ -2,6 +2,7 @@ import Field from "./Field";
 import { render, screen } from "@testing-library/react";
 import { vi, describe, it, expect, beforeEach } from "vitest";
 import type { FragmentEmitter, Fragment } from "../fragments/types";
+import { setCurrentSdk } from "./fieldEditorMocks";
 
 vi.mock("../fragments", () => {
   const teardownA = vi.fn();
@@ -73,19 +74,21 @@ const buildSdk = (initialValue = "") => {
   };
 };
 
-let currentSdk: ReturnType<typeof buildSdk>;
-vi.mock("@contentful/react-apps-toolkit", () => ({
-  useSDK: () => currentSdk,
-}));
+vi.mock("@contentful/react-apps-toolkit", async () =>
+  (await import("./fieldEditorMocks")).reactAppsToolkitMock(),
+);
+vi.mock("@contentful/field-editor-single-line", async () =>
+  (await import("./fieldEditorMocks")).singleLineEditorMock(),
+);
 
-vi.mock("@contentful/field-editor-single-line", () => ({
-  SingleLineEditor: (props: { isInitiallyDisabled?: boolean }) => (
-    <div
-      data-test-id="single-line-editor"
-      data-disabled={String(!!props.isInitiallyDisabled)}
-    />
-  ),
-}));
+// Tracks what the shared mock hands back, so assertions can reach the same
+// object the component saw.
+let currentSdk: ReturnType<typeof buildSdk>;
+const useSdk = (next: ReturnType<typeof buildSdk>) => {
+  currentSdk = next;
+  setCurrentSdk(next);
+  return next;
+};
 
 describe("Field component", () => {
   beforeEach(() => {
@@ -96,7 +99,7 @@ describe("Field component", () => {
   });
 
   it("renders the SingleLineEditor and starts the auto-resizer", () => {
-    currentSdk = buildSdk();
+    useSdk(buildSdk());
 
     render(<Field />);
 
@@ -104,8 +107,23 @@ describe("Field component", () => {
     expect(currentSdk.window.startAutoResizer).toHaveBeenCalled();
   });
 
+  // The field is rendered read-only on purpose — a title field can't be
+  // UI-disabled through Contentful, so this prop is the only signal. Nothing
+  // asserted it before, which let the stub drift to a prop `Field.tsx` doesn't
+  // even pass.
+  it("renders the editor disabled", () => {
+    useSdk(buildSdk());
+
+    render(<Field />);
+
+    expect(screen.getByTestId("single-line-editor")).toHaveAttribute(
+      "data-disabled",
+      "true",
+    );
+  });
+
   it("composes fragment emits with the configured separator and writes via sdk.field.setValue", () => {
-    currentSdk = buildSdk();
+    useSdk(buildSdk());
 
     render(<Field />);
 
@@ -119,7 +137,7 @@ describe("Field component", () => {
   });
 
   it("omits empty fragments from the joined output (no orphan separators)", () => {
-    currentSdk = buildSdk();
+    useSdk(buildSdk());
 
     render(<Field />);
 
@@ -139,7 +157,7 @@ describe("Field component", () => {
   // produce a shortened title — the web app autosaves whatever lands here, so
   // writing it would delete the notation from a title the server got right.
   it("withholds the write until every fragment has reported", () => {
-    currentSdk = buildSdk("2026 - MRRL - stored");
+    useSdk(buildSdk("2026 - MRRL - stored"));
 
     render(<Field />);
 
@@ -153,7 +171,7 @@ describe("Field component", () => {
   });
 
   it("withholds the write when a fragment reports an unknown value", () => {
-    currentSdk = buildSdk("2026 - MRRL - stored");
+    useSdk(buildSdk("2026 - MRRL - stored"));
 
     render(<Field />);
 
@@ -169,7 +187,7 @@ describe("Field component", () => {
   });
 
   it("skips setValue when a re-emit produces the same composed value", () => {
-    currentSdk = buildSdk();
+    useSdk(buildSdk());
 
     render(<Field />);
 
@@ -186,7 +204,7 @@ describe("Field component", () => {
   });
 
   it("invokes every fragment teardown on unmount", () => {
-    currentSdk = buildSdk();
+    useSdk(buildSdk());
 
     const { unmount } = render(<Field />);
     unmount();

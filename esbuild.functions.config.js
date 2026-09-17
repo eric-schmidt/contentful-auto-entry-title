@@ -50,10 +50,16 @@
 // this file needs to read `.env`. dotenvx does not clobber variables that are
 // already exported, so a shell value or CI secret still wins over the file.
 //
-// Unlike the app definition id, a missing delivery key does NOT fail the build:
-// the editor path doesn't need it (it proxies through `sdk.cmaAdapter` as the
-// signed-in user), and the function degrades to titles without notations rather
-// than not building. It warns instead.
+// Unlike the app definition id, a missing delivery key does NOT fail the build —
+// it warns instead. That is a deliberate convenience for builds that only touch
+// the propagation logic, not a sign the key is optional: without it every
+// concept read fails, `conceptNotation` returns `null`, and the function stops
+// rewriting titles altogether rather than writing them without notations. See
+// docs/taxonomy-notation.md ("Failure behaviour — read this first").
+//
+// The editor needs the same key and gets it from Vite, not from here — it reads
+// concepts over the CDA with `fetch`, because `sdk.cma` cannot read Concepts at
+// all. See docs/build-time-config.md.
 
 const appDefinitionId = process.env.CONTENTFUL_APP_DEF_ID;
 if (!appDefinitionId) {
@@ -67,8 +73,10 @@ const deliveryKey = process.env.CONTENTFUL_DELIVERY_KEY ?? "";
 if (!deliveryKey) {
   console.warn(
     "[auto-entry-title] CONTENTFUL_DELIVERY_KEY is not set. Building anyway, " +
-      "but the deployed function will omit taxonomy notations from every " +
-      "title it rewrites. Set it in .env and rebuild.",
+      "but the deployed function will not be able to read taxonomy concepts, " +
+      "so it will stop updating titles entirely rather than write them " +
+      "without notations. Stored titles are left untouched. " +
+      "Set it in .env and rebuild.",
   );
 }
 

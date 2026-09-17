@@ -44,7 +44,9 @@ const browserDeliveryKey = (): string =>
   import.meta.env.CONTENTFUL_DELIVERY_KEY ?? "";
 
 // Returns undefined when no key was built in, which `conceptNotation` already
-// handles by warning and emitting "" — the same degradation as the Function.
+// handles by warning and returning `null` — the same degradation as the
+// Function: the whole title is withheld rather than written without its
+// notation. See docs/taxonomy-notation.md.
 export const createBrowserConceptReader = (
   sdk: FieldAppSDK,
 ): ConceptReader | undefined => {
@@ -53,8 +55,10 @@ export const createBrowserConceptReader = (
   if (!deliveryKey) {
     console.warn(
       "[auto-entry-title] no CONTENTFUL_DELIVERY_KEY was built into the " +
-        "editor bundle, so taxonomy notations will be omitted from the title. " +
-        'Set it in .env and rebuild — see README "One-time setup".',
+        "editor bundle, so concepts cannot be read and this entry's title " +
+        "will not be updated at all. The stored title is left untouched " +
+        "rather than rewritten without its notation. " +
+        'Set it in .env and rebuild — see README "Quickstart".',
     );
     return undefined;
   }

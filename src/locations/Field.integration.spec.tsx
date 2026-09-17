@@ -14,8 +14,9 @@
 // only in the browser.
 
 import { render } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ConceptRecord } from "../fragments/types";
+import { setCurrentSdk } from "./fieldEditorMocks";
 
 const CONCEPTS_BY_SCHEME: Record<string, ConceptRecord[]> = {
   division: [{ id: "mens", notations: ["M"] }],
@@ -28,11 +29,21 @@ vi.mock("../fragments/conceptReaderBrowser", () => ({
     CONCEPTS_BY_SCHEME[schemeId] ?? [],
 }));
 
+// Shared with Field.spec.tsx so the two stubs cannot drift — see
+// ./fieldEditorMocks.
+vi.mock("@contentful/react-apps-toolkit", async () =>
+  (await import("./fieldEditorMocks")).reactAppsToolkitMock(),
+);
+vi.mock("@contentful/field-editor-single-line", async () =>
+  (await import("./fieldEditorMocks")).singleLineEditorMock(),
+);
+
 let currentSdk: ReturnType<typeof buildSdk>;
-vi.mock("@contentful/react-apps-toolkit", () => ({ useSDK: () => currentSdk }));
-vi.mock("@contentful/field-editor-single-line", () => ({
-  SingleLineEditor: () => <div data-test-id="single-line-editor" />,
-}));
+const useSdk = (next: ReturnType<typeof buildSdk>) => {
+  currentSdk = next;
+  setCurrentSdk(next);
+  return next;
+};
 
 import Field from "./Field";
 
@@ -115,8 +126,12 @@ describe("Field + real conceptNotation: taxonomy concept changes", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("writes the notation blob on mount", async () => {
-    currentSdk = buildSdk(["mens", "doubleRl"]);
+    useSdk(buildSdk(["mens", "doubleRl"]));
 
     render(<Field />);
     await settle();
@@ -125,7 +140,7 @@ describe("Field + real conceptNotation: taxonomy concept changes", () => {
   });
 
   it("shortens the blob when one concept is removed", async () => {
-    currentSdk = buildSdk(["mens", "doubleRl"]);
+    useSdk(buildSdk(["mens", "doubleRl"]));
 
     render(<Field />);
     await settle();
@@ -138,7 +153,7 @@ describe("Field + real conceptNotation: taxonomy concept changes", () => {
   });
 
   it("drops the blob entirely when the last concept is removed", async () => {
-    currentSdk = buildSdk(["mens"]);
+    useSdk(buildSdk(["mens"]));
 
     render(<Field />);
     await settle();
@@ -152,7 +167,7 @@ describe("Field + real conceptNotation: taxonomy concept changes", () => {
   });
 
   it("grows the blob again when a concept is re-added", async () => {
-    currentSdk = buildSdk([]);
+    useSdk(buildSdk([]));
 
     render(<Field />);
     await settle();

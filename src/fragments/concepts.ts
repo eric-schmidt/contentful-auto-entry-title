@@ -180,9 +180,9 @@ export const createCdaConceptReader = ({
 // renders share one request.
 //
 // EDITOR ONLY, and never invalidated for the session — this is the deliberate
-// staleness policy documented in CLAUDE.md: if a notation is edited in another
-// tab, the editor stays stale until the entry is reopened, and the server-side
-// path is authoritative. Do not add refresh logic here. The Function builds an
+// staleness policy documented in AGENTS.md "Editor-side staleness": if a
+// notation is edited in another tab, the editor stays stale until the entry is
+// reopened, and the server-side path is authoritative. Do not add refresh logic here. The Function builds an
 // UNCACHED reader per invocation, since a stale cache there would defeat the
 // point of the propagation action.
 //

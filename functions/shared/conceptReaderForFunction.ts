@@ -51,9 +51,10 @@ export const conceptReaderForFunction = ({
   if (!deliveryKey) {
     console.warn(
       `[auto-entry-title] ${context}: no delivery key was inlined at build ` +
-        "time, so taxonomy notations will be omitted from every title this " +
-        "invocation rewrites. Set CONTENTFUL_DELIVERY_KEY in .env, then " +
-        "rebuild and re-upload — see README \"One-time setup\".",
+        "time, so concepts cannot be read and this invocation will not update " +
+        "any title. Stored titles are left untouched rather than rewritten " +
+        "without their notations. Set CONTENTFUL_DELIVERY_KEY in .env, then " +
+        'rebuild and re-upload — see README "Quickstart".',
     );
     return undefined;
   }

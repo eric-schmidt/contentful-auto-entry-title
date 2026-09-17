@@ -6,11 +6,15 @@
 // `entity.sys.id` filter below are both worked around here.
 
 import type { FragmentCmaClient, Fragment } from "./types";
+import { retryOverDelays } from "./retry";
 
 // Formats an ISO 8601 instant as `Mon-DD` in the supplied IANA timezone (or UTC
 // if none). Uses Intl.DateTimeFormat with locale "en-US" so the month
 // abbreviation is deterministic regardless of the runtime locale.
-export const formatPublicationDate = (iso: string, timezone?: string): string => {
+export const formatPublicationDate = (
+  iso: string,
+  timezone?: string,
+): string => {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   const fmt = new Intl.DateTimeFormat("en-US", {
@@ -48,8 +52,6 @@ type ScheduledActionItem = {
 // that branch opts in.
 const SCHEDULE_LOOKUP_RETRY_DELAYS_MS = [0, 250, 500, 1000, 2000];
 const NO_RETRY_DELAYS_MS = [0];
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const fetchMatchingScheduledActions = async (
   cma: FragmentCmaClient,
@@ -111,19 +113,15 @@ const findScheduledDateForEntry = async (
 
   const releaseIds = activeReleases.map((r) => r.sys.id);
 
-  let filteredItems: ScheduledActionItem[] = [];
-  const delays = awaitScheduleConsistency
-    ? SCHEDULE_LOOKUP_RETRY_DELAYS_MS
-    : NO_RETRY_DELAYS_MS;
-  for (const delay of delays) {
-    if (delay > 0) await sleep(delay);
-    filteredItems = await fetchMatchingScheduledActions(
-      cma,
-      releaseIds,
-      environmentId,
-    );
-    if (filteredItems.length > 0) break;
-  }
+  // No catch, on purpose: a throw here reaches `composeTitle`'s per-fragment
+  // catch, which substitutes "". See ./retry.ts.
+  const filteredItems = await retryOverDelays(
+    awaitScheduleConsistency
+      ? SCHEDULE_LOOKUP_RETRY_DELAYS_MS
+      : NO_RETRY_DELAYS_MS,
+    () => fetchMatchingScheduledActions(cma, releaseIds, environmentId),
+    (items) => items.length > 0,
+  );
 
   if (!filteredItems.length) return "";
 

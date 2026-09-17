@@ -24,12 +24,12 @@
 // a concept applied to a few hundred entries will rate-limit against the ~7
 // req/s CMA cap.
 
-import type { EntryProps, PlainClientAPI } from "contentful-management";
+import type { PlainClientAPI } from "contentful-management";
 import { conceptReaderForFunction } from "../shared/conceptReaderForFunction";
 import { resolveDefaultLocale } from "../shared/findManagedTitleFieldId";
+import { paginateEntries } from "../shared/paginateEntries";
 import { recomputeTitleForEntries } from "../shared/recomputeTitleForEntries";
 
-const PAGE_SIZE = 100;
 const CONTEXT = "conceptNotationAction";
 
 // App Action parameters are limited to Symbol | Enum | Number | Boolean — there
@@ -60,33 +60,10 @@ const parseConceptIds = (raw: string | undefined): string[] => [
   ),
 ];
 
-// Mirrors `paginateLinksToEntry` in ./linkedEntryTitle.ts. One query covers all
-// the concept ids at once: `[in]` works on `metadata.concepts.sys.id` (unlike
-// the scheduled-actions `entity.sys.id` filter, where it is silently ignored).
-const paginateEntriesWithConcepts = async (
-  cma: PlainClientAPI,
-  conceptIds: string[],
-): Promise<EntryProps[]> => {
-  const all: EntryProps[] = [];
-  let skip = 0;
-  while (true) {
-    const page = await cma.entry.getMany({
-      query: {
-        "metadata.concepts.sys.id[in]": conceptIds.join(","),
-        skip,
-        limit: PAGE_SIZE,
-      },
-    });
-    all.push(...(page.items as EntryProps[]));
-    skip += PAGE_SIZE;
-    if (skip >= page.total) break;
-  }
-  return all;
-};
-
 // Recomputes the auto-title of every entry tagged with any of `conceptIds`.
 // Invoke this after editing a concept's notation — nothing does so
-// automatically, by design; see README "Propagating concept edits".
+// automatically, by design; see docs/taxonomy-notation.md ("Propagating
+// concept edits").
 export const handler = async (
   event: AppActionEvent,
   context: FunctionContext,
@@ -112,7 +89,14 @@ export const handler = async (
   if (!conceptReader) return { conceptIds, entriesConsidered: 0 };
 
   const defaultLocale = await resolveDefaultLocale(context.cma);
-  const entries = await paginateEntriesWithConcepts(context.cma, conceptIds);
+  // One query covers all the concept ids at once: `[in]` works on
+  // `metadata.concepts.sys.id` (unlike the scheduled-actions `entity.sys.id`
+  // filter, where it is silently ignored).
+  const entries = await paginateEntries(
+    context.cma,
+    { "metadata.concepts.sys.id[in]": conceptIds.join(",") },
+    CONTEXT,
+  );
 
   await recomputeTitleForEntries({
     cma: context.cma,
