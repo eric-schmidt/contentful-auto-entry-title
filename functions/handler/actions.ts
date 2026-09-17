@@ -16,6 +16,13 @@
 // Recursion is safe for free: `recomputeTitleForEntries` PATCHes drafts and
 // never publishes, so no `Entry.publish` fires back into the dispatcher. Reruns
 // are cheap because it skips entries whose recomputed title already matches.
+//
+// TWO THINGS THIS DOES NOT HAVE YET, both deferred deliberately — see TODO.md:
+// nothing in the repo invokes it (there is no app location that could hold a
+// button, so callers are the CMA / CLI / curl), and the write path inherits
+// `recomputeTitleForEntries`' one-PATCH-per-entry loop with no 429 handling, so
+// a concept applied to a few hundred entries will rate-limit against the ~7
+// req/s CMA cap.
 
 import type { EntryProps, PlainClientAPI } from "contentful-management";
 import { conceptReaderForFunction } from "../shared/conceptReaderForFunction";

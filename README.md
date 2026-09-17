@@ -402,7 +402,7 @@ If no delivery key was inlined at build time, the action **bails without writing
 State these plainly rather than papering over them:
 
 - **An unattended taxonomy edit propagates to nothing** until someone invokes the action, or each affected entry is next opened (whose `subscribe` re-reads live concepts, and the web app autosaves) or next published.
-- **Nothing invokes the action automatically.** Callers are the CMA, the CLI, `curl`, or a future sidebar button. If unattended propagation ever becomes a hard requirement, the only real options are an external scheduled poller diffing `sys.updatedAt` on concepts, or Contentful shipping a taxonomy event topic — both out of scope.
+- **Nothing invokes the action at all** — not automatically, and not from the UI. This app registers only the `entry-field` location, so there is no rendered surface with a button on it; callers today are the CMA, the CLI, or `curl`. Giving it a page location with a concept picker, and moving its writes onto the Bulk Entry Content Operations API so a large repair doesn't hit the ~7 req/s CMA limit, is a **planned but deferred** item — see `TODO.md`. If *unattended* propagation ever becomes a hard requirement, the only real options are an external scheduled poller diffing `sys.updatedAt` on concepts, or Contentful shipping a taxonomy event topic — both out of scope.
 - **Concept deletion** removes the link from `metadata.concepts`, which is an *entry* change rather than a concept event — same gap, same repair paths.
 - **The CDA reads published taxonomy state.** A concept edit not yet visible to the CDA won't appear. The org-scoped CMA is the read-your-writes path if that ever matters.
 - **Season and Year are excluded by choice**, not by limitation — add them to `schemeIds`.
