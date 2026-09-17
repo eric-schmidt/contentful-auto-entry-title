@@ -118,13 +118,15 @@ describe("referencedEntryTitle", () => {
       expect(warnSpy).toHaveBeenCalled();
     });
 
-    it("warns and no-ops when the field id is missing", () => {
+    it("warns and emits empty when the field id is missing", () => {
       const { sdk } = buildSdk(null);
       const emit = mockEmitter();
 
       const teardown = referencedEntryTitle({ fieldId: "nope" }).subscribe({ sdk, emit });
 
-      expect(emit).not.toHaveBeenCalled();
+      // Must emit, not stay silent: an un-emitted slot counts as UNKNOWN and
+      // Field.tsx withholds the whole title until every slot has answered.
+      expect(emit).toHaveBeenCalledWith("");
       expect(warnSpy).toHaveBeenCalledOnce();
       expect(typeof teardown).toBe("function");
       expect(() => teardown()).not.toThrow();

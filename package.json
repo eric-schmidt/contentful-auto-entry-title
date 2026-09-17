@@ -25,6 +25,8 @@
     "add-locations": "contentful-app-scripts add-locations",
     "upload": "contentful-app-scripts upload --bundle-dir ./build",
     "upload-ci": "contentful-app-scripts upload --ci --bundle-dir ./build --organization-id $CONTENTFUL_ORG_ID --definition-id $CONTENTFUL_APP_DEF_ID --token $CONTENTFUL_ACCESS_TOKEN",
+    "upsert-actions": "contentful-app-scripts upsert-actions --manifest-file contentful-app-manifest.json",
+    "upsert-actions-ci": "contentful-app-scripts --ci upsert-actions --manifest-file contentful-app-manifest.json --organization-id $CONTENTFUL_ORG_ID --definition-id $CONTENTFUL_APP_DEF_ID --token $CONTENTFUL_ACCESS_TOKEN",
     "import-content-model": "tsx --env-file=.env scripts/import-content-model.mts"
   },
   "eslintConfig": {

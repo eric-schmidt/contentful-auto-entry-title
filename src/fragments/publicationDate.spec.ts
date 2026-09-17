@@ -253,14 +253,16 @@ describe("publicationDate", () => {
   });
 
   describe("compute", () => {
+    // Returns the mock UNCAST so tests can assert on `scheduledActions.getMany`
+    // call counts. The `as never` that satisfies FragmentCmaClient moves to the
+    // `cma:` argument at each call site.
     const buildCma = (
       releases: { items: { sys: { id: string; status?: string } }[] },
       scheduled: { items: ScheduledItem[] },
-    ) =>
-      ({
-        release: { query: vi.fn(async () => releases) },
-        scheduledActions: { getMany: vi.fn(async () => scheduled) },
-      }) as never;
+    ) => ({
+      release: { query: vi.fn(async () => releases) },
+      scheduledActions: { getMany: vi.fn(async () => scheduled) },
+    });
 
     const buildEntry = () =>
       ({
@@ -272,7 +274,7 @@ describe("publicationDate", () => {
       const cma = buildCma({ items: [] }, { items: [] });
       const promise = publicationDate().compute({
         entry: buildEntry(),
-        cma,
+        cma: cma as never,
         defaultLocale: "en-US",
         environmentId: "master",
       });
@@ -289,7 +291,7 @@ describe("publicationDate", () => {
       );
       const promise = publicationDate().compute({
         entry: buildEntry(),
-        cma,
+        cma: cma as never,
         defaultLocale: "en-US",
         environmentId: "master",
       });
@@ -297,6 +299,51 @@ describe("publicationDate", () => {
       const result = await promise;
 
       expect(result).toBe("");
+    });
+
+    it("does not burn the retry schedule when no schedule is expected", async () => {
+      // Regression: the retry loop exists for the Release.save read-after-write
+      // race, but it retried on an EMPTY result — and an entry with no
+      // scheduled release always returns empty. So every unscheduled entry paid
+      // all 5 attempts to learn nothing. Multiplied across a publish fan-out
+      // that was the single largest source of CMA 429s (60 of 110 requests for
+      // 12 parents). Retrying is opt-in now, and only the Release branch opts
+      // in.
+      const cma = buildCma(
+        { items: [buildActiveRelease("rel-1")] },
+        { items: [] },
+      );
+      const promise = publicationDate().compute({
+        entry: buildEntry(),
+        cma: cma as never,
+        defaultLocale: "en-US",
+        environmentId: "master",
+      });
+      await vi.runAllTimersAsync();
+      await promise;
+
+      expect(cma.scheduledActions.getMany).toHaveBeenCalledTimes(1);
+    });
+
+    it("still retries when the caller expects a schedule to appear", async () => {
+      // The Release.* / ScheduledAction.* branch sets this: the event itself is
+      // evidence a schedule exists, so an empty read means "not queryable yet"
+      // and is worth waiting for.
+      const cma = buildCma(
+        { items: [buildActiveRelease("rel-1")] },
+        { items: [] },
+      );
+      const promise = publicationDate().compute({
+        entry: buildEntry(),
+        cma: cma as never,
+        defaultLocale: "en-US",
+        environmentId: "master",
+        awaitScheduleConsistency: true,
+      });
+      await vi.runAllTimersAsync();
+      await promise;
+
+      expect(cma.scheduledActions.getMany).toHaveBeenCalledTimes(5);
     });
 
     it("returns the formatted date when a scheduled action exists", async () => {
@@ -310,7 +357,7 @@ describe("publicationDate", () => {
       );
       const promise = publicationDate().compute({
         entry: buildEntry(),
-        cma,
+        cma: cma as never,
         defaultLocale: "en-US",
         environmentId: "master",
       });
@@ -334,7 +381,7 @@ describe("publicationDate", () => {
       );
       const promise = publicationDate().compute({
         entry: buildEntry(),
-        cma,
+        cma: cma as never,
         defaultLocale: "en-US",
         environmentId: "master",
       });
@@ -358,7 +405,7 @@ describe("publicationDate", () => {
       );
       const promise = publicationDate().compute({
         entry: buildEntry(),
-        cma,
+        cma: cma as never,
         defaultLocale: "en-US",
         environmentId: "master",
       });
@@ -379,7 +426,7 @@ describe("publicationDate", () => {
       );
       const promise = publicationDate().compute({
         entry: buildEntry(),
-        cma,
+        cma: cma as never,
         defaultLocale: "en-US",
         environmentId: "master",
       });

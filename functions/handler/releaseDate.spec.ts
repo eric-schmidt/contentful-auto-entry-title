@@ -94,6 +94,7 @@ const buildArgs = (overrides: {
       return ei;
     },
   );
+  const publish = vi.fn();
   const cma = {
     locale: {
       getMany: vi.fn(async () => ({
@@ -101,12 +102,15 @@ const buildArgs = (overrides: {
       })),
     },
     release: { get: releaseGet },
-    entry: { get: entryGet, patch },
+    // `publish` is here only to be asserted never-called — this path writes
+    // drafts, which emit `Entry.save` and so cannot re-enter the dispatcher.
+    entry: { get: entryGet, patch, publish },
     editorInterface: { get: editorInterfaceGet },
   };
   return {
     cma,
     patch,
+    publish,
     releaseGet,
     entryGet,
     environmentId: "master",
@@ -226,6 +230,9 @@ describe("handleReleaseOrScheduledActionEvent", () => {
         },
       ],
     );
+    // Draft-only. A publish here would emit `Entry.publish` and re-enter the
+    // dispatcher; the recursion-safety argument is structural, so pin it.
+    expect(args.publish).not.toHaveBeenCalled();
   });
 
   it("recomputes for ScheduledAction.delete so the date drops", async () => {

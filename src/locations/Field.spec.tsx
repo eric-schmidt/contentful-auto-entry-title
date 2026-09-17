@@ -2,6 +2,7 @@ import Field from "./Field";
 import { render, screen } from "@testing-library/react";
 import { vi, describe, it, expect, beforeEach } from "vitest";
 import type { FragmentEmitter, Fragment } from "../fragments/types";
+import { setCurrentSdk } from "./fieldEditorMocks";
 
 vi.mock("../fragments", () => {
   const teardownA = vi.fn();
@@ -64,22 +65,30 @@ const buildSdk = (initialValue = "") => {
       setValue,
     },
     window: { startAutoResizer: vi.fn() },
+    // Field.tsx builds a concept reader keyed by space+environment and backed
+    // by cmaAdapter. The reader is lazy — nothing is requested until a
+    // fragment calls it, and `../fragments` is mocked here — so these only
+    // need to exist, not to work.
+    ids: { space: "test-space", environment: "master", organization: "test-org" },
+    cmaAdapter: { makeRequest: vi.fn() },
   };
 };
 
-let currentSdk: ReturnType<typeof buildSdk>;
-vi.mock("@contentful/react-apps-toolkit", () => ({
-  useSDK: () => currentSdk,
-}));
+vi.mock("@contentful/react-apps-toolkit", async () =>
+  (await import("./fieldEditorMocks")).reactAppsToolkitMock(),
+);
+vi.mock("@contentful/field-editor-single-line", async () =>
+  (await import("./fieldEditorMocks")).singleLineEditorMock(),
+);
 
-vi.mock("@contentful/field-editor-single-line", () => ({
-  SingleLineEditor: (props: { isInitiallyDisabled?: boolean }) => (
-    <div
-      data-test-id="single-line-editor"
-      data-disabled={String(!!props.isInitiallyDisabled)}
-    />
-  ),
-}));
+// Tracks what the shared mock hands back, so assertions can reach the same
+// object the component saw.
+let currentSdk: ReturnType<typeof buildSdk>;
+const useSdk = (next: ReturnType<typeof buildSdk>) => {
+  currentSdk = next;
+  setCurrentSdk(next);
+  return next;
+};
 
 describe("Field component", () => {
   beforeEach(() => {
@@ -90,7 +99,7 @@ describe("Field component", () => {
   });
 
   it("renders the SingleLineEditor and starts the auto-resizer", () => {
-    currentSdk = buildSdk();
+    useSdk(buildSdk());
 
     render(<Field />);
 
@@ -98,8 +107,23 @@ describe("Field component", () => {
     expect(currentSdk.window.startAutoResizer).toHaveBeenCalled();
   });
 
+  // The field is rendered read-only on purpose — a title field can't be
+  // UI-disabled through Contentful, so this prop is the only signal. Nothing
+  // asserted it before, which let the stub drift to a prop `Field.tsx` doesn't
+  // even pass.
+  it("renders the editor disabled", () => {
+    useSdk(buildSdk());
+
+    render(<Field />);
+
+    expect(screen.getByTestId("single-line-editor")).toHaveAttribute(
+      "data-disabled",
+      "true",
+    );
+  });
+
   it("composes fragment emits with the configured separator and writes via sdk.field.setValue", () => {
-    currentSdk = buildSdk();
+    useSdk(buildSdk());
 
     render(<Field />);
 
@@ -113,11 +137,14 @@ describe("Field component", () => {
   });
 
   it("omits empty fragments from the joined output (no orphan separators)", () => {
-    currentSdk = buildSdk();
+    useSdk(buildSdk());
 
     render(<Field />);
 
+    // Both slots must report before anything is written — see the
+    // withholding test below — so "" is how a slot says "nothing here".
     mocked.__testRefs.emitA("A");
+    mocked.__testRefs.emitB("");
 
     expect(currentSdk.field.setValue).toHaveBeenLastCalledWith("A");
 
@@ -125,8 +152,42 @@ describe("Field component", () => {
     expect(currentSdk.field.setValue).toHaveBeenLastCalledWith("A - B");
   });
 
+  // The clobber guard. A fragment that hasn't answered yet, or that reports
+  // `null` because it couldn't find out (a failed taxonomy read), must not
+  // produce a shortened title — the web app autosaves whatever lands here, so
+  // writing it would delete the notation from a title the server got right.
+  it("withholds the write until every fragment has reported", () => {
+    useSdk(buildSdk("2026 - MRRL - stored"));
+
+    render(<Field />);
+
+    mocked.__testRefs.emitA("A");
+
+    expect(currentSdk.field.setValue).not.toHaveBeenCalled();
+    expect(currentSdk.field.getValue()).toBe("2026 - MRRL - stored");
+
+    mocked.__testRefs.emitB("B");
+    expect(currentSdk.field.setValue).toHaveBeenLastCalledWith("A - B");
+  });
+
+  it("withholds the write when a fragment reports an unknown value", () => {
+    useSdk(buildSdk("2026 - MRRL - stored"));
+
+    render(<Field />);
+
+    mocked.__testRefs.emitA("A");
+    mocked.__testRefs.emitB(null);
+
+    expect(currentSdk.field.setValue).not.toHaveBeenCalled();
+    expect(currentSdk.field.getValue()).toBe("2026 - MRRL - stored");
+
+    // ...and recovers once the value becomes known.
+    mocked.__testRefs.emitB("B");
+    expect(currentSdk.field.setValue).toHaveBeenLastCalledWith("A - B");
+  });
+
   it("skips setValue when a re-emit produces the same composed value", () => {
-    currentSdk = buildSdk();
+    useSdk(buildSdk());
 
     render(<Field />);
 
@@ -143,7 +204,7 @@ describe("Field component", () => {
   });
 
   it("invokes every fragment teardown on unmount", () => {
-    currentSdk = buildSdk();
+    useSdk(buildSdk());
 
     const { unmount } = render(<Field />);
     unmount();

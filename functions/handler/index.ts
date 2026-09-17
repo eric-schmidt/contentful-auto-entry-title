@@ -8,6 +8,7 @@ import type {
   PlainClientAPI,
   ReleaseProps,
 } from "contentful-management";
+import { conceptReaderForFunction } from "../shared/conceptReaderForFunction";
 import { handleLinkedEntryPublish } from "./linkedEntryTitle";
 import { handleReleaseOrScheduledActionEvent } from "./releaseDate";
 
@@ -43,11 +44,27 @@ export const handler = async (
 ): Promise<void> => {
   const topic = event.headers["X-Contentful-Topic"] ?? "";
 
+  // Passed to BOTH branches. Every recompute runs the whole composition, which
+  // includes `conceptNotation` — a branch that omits this would strip the
+  // notation blob out of each title it rewrites. Built lazily so an ignored
+  // topic doesn't emit a missing-key warning it can do nothing about.
+  //
+  // There is deliberately no concept branch here: no App Event topic fires on a
+  // taxonomy change, so there is nothing to subscribe to. Concept edits
+  // propagate through the App Action in ./actions.ts instead.
+  const buildConceptReader = () =>
+    conceptReaderForFunction({
+      spaceId: context.spaceId,
+      environmentId: context.environmentId,
+      context: "dispatcher",
+    });
+
   if (topic === ENTRY_PUBLISH_TOPIC) {
     await handleLinkedEntryPublish({
       cma: context.cma,
       environmentId: context.environmentId,
       sourceEntry: event.body as EntryProps,
+      conceptReader: buildConceptReader(),
     });
     return;
   }
@@ -61,6 +78,7 @@ export const handler = async (
       environmentId: context.environmentId,
       topic,
       body: event.body as never,
+      conceptReader: buildConceptReader(),
     });
   }
 };

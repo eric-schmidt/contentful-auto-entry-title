@@ -5,6 +5,8 @@
 // trust the event body for member ids (the release is already gone).
 
 import type { EntryProps, PlainClientAPI, ReleaseProps } from "contentful-management";
+import type { ConceptReader } from "../../src/fragments/types";
+import { retryOverDelays } from "../../src/fragments/retry";
 import { resolveDefaultLocale } from "../shared/findManagedTitleFieldId";
 import { recomputeTitleForEntries } from "../shared/recomputeTitleForEntries";
 
@@ -27,11 +29,10 @@ type Args = {
   environmentId: string;
   topic: string;
   body: ReleaseProps | ScheduledActionEventBody;
+  conceptReader?: ConceptReader;
 };
 
 type EntryLink = { sys: { type: "Link"; linkType: "Entry"; id: string } };
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const resolveReleaseId = (
   topic: string,
@@ -62,19 +63,23 @@ const safeReleaseGetWithMembers = async (
   cma: PlainClientAPI,
   releaseId: string,
 ): Promise<ReleaseProps | null> => {
-  let lastResponse: ReleaseProps | null = null;
-  for (const delay of RELEASE_FETCH_RETRY_DELAYS_MS) {
-    if (delay > 0) await sleep(delay);
-    let release: ReleaseProps;
-    try {
-      release = await cma.release.get({ releaseId });
-    } catch {
-      return null;
-    }
-    lastResponse = release;
-    if (extractEntryLinks(release).length > 0) return release;
-  }
-  return lastResponse;
+  // The catch stays here rather than inside `retryOverDelays`: a thrown fetch
+  // usually means the release no longer exists, and no amount of waiting fixes
+  // that, so `null` short-circuits the remaining attempts. Exhausting the
+  // ladder is different — it yields the last response, members or not.
+  return retryOverDelays(
+    RELEASE_FETCH_RETRY_DELAYS_MS,
+    async (): Promise<ReleaseProps | null> => {
+      try {
+        return await cma.release.get({ releaseId });
+      } catch {
+        return null;
+      }
+    },
+    // `null` counts as done, which is how the abort propagates: it stops the
+    // ladder AND is the value returned.
+    (result) => result === null || extractEntryLinks(result).length > 0,
+  );
 };
 
 // Handles Release.* and ScheduledAction.* events. Drives a recompute of each
@@ -92,6 +97,7 @@ export const handleReleaseOrScheduledActionEvent = async ({
   environmentId,
   topic,
   body,
+  conceptReader,
 }: Args): Promise<void> => {
   const releaseId = resolveReleaseId(topic, body);
   if (!releaseId) return;
@@ -136,5 +142,11 @@ export const handleReleaseOrScheduledActionEvent = async ({
     defaultLocale,
     entries,
     context: "releaseDate",
+    conceptReader,
+    // The only branch that opts in. A Release / ScheduledAction event is itself
+    // evidence that a schedule exists, so an empty scheduled-action read here
+    // means "not queryable yet" and is worth waiting out. Everywhere else empty
+    // is the permanent answer and retrying just burns rate limit.
+    awaitScheduleConsistency: true,
   });
 };
