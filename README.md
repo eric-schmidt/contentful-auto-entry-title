@@ -11,8 +11,12 @@ This app is intended for non-localized entry-title fields. The composed value is
 1. Clone down this repo.
 2. Ensure you are using a minimum of Node v22 (if using [NVM](https://github.com/nvm-sh/nvm) you can just run `nvm use` in the repo root).
 3. Run `npm install` to install dependencies.
-4. Run `npm run build` to create the build directory that can be uploaded to Contentful.
-5. You can run the *frontend* portion of this app locally using `npm run start`; however, the backend Functions have to be uploaded to Contentful in order to work properly (see next section).
+4. Copy `.env.example` to `.env` and fill in the values:
+   - `CONTENTFUL_ORG_ID`, `CONTENTFUL_APP_DEF_ID` — identify the App Definition. `CONTENTFUL_APP_DEF_ID` is **required at build time** (see "Required at build time" below).
+   - `CONTENTFUL_ACCESS_TOKEN` — a personal access token, used by `npm run upload`, `npm run upload-ci`, `npm run upsert-actions`, and `npm run import-content-model`. **The name is not ours to choose, so don't "clean it up" to `CONTENTFUL_MANAGEMENT_TOKEN`.** `@contentful/app-scripts` hardcodes it (`ACCESS_TOKEN_ENV_KEY = 'CONTENTFUL_ACCESS_TOKEN'` in its `constants.js`) with no flag to override, and the *interactive* `npm run upload` reads it directly from the environment — rename it and every upload prompts for a browser OAuth paste instead. The CLI also **writes this name back into `.env`** after such a prompt, so a rename gets silently re-added alongside it.
+   - `CONTENTFUL_DELIVERY_KEY` — a read-only Delivery API key. Used for **taxonomy concept reads at function runtime** (see "Taxonomy notation fragment"). **It must be authorized for every environment the app is installed in, not just `master`** — a Delivery key is scoped per environment, and a key that lacks the app's environment makes every concept read return `404`, which looks exactly like a missing API route. This is the single most likely reason the notation blob silently goes missing from titles.
+5. Run `npm run build` to create the build directory that can be uploaded to Contentful.
+6. You can run the *frontend* portion of this app locally using `npm run start`; however, the backend Functions have to be uploaded to Contentful in order to work properly (see next section).
 
 ## App Definition Setup
 1. Navigate to your Contentful Organization overview and click on **Apps**.
@@ -27,7 +31,7 @@ This app is intended for non-localized entry-title fields. The composed value is
 
 ## Importing a Space Export
 
-1. Drop one or more `contentful space export` JSON dumps in `exports/space/`. This repo ships with `exports/space/space-export.json` as a ready-to-use example content model.
+1. Drop one or more `contentful space export` JSON dumps in `exports/space/`. This repo ships with `exports/space/export.json` as a ready-to-use example content model.
 2. Make sure the target space is blank — `contentful-import` is idempotent by entity `sys.id`, so re-running against a populated space *updates* matching entities in place rather than failing.
 3. Run `npm run import-content-model`. The script lists every `.json` in `exports/space/` and (if there's more than one) asks which to use; then prompts for space ID, environment ID, and a y/N confirm. Pass `--yes` to skip the confirm in scripted environments.
 4. The chosen export is sent through `contentful-import` in full — content types, editor interfaces, locales, tags, entries, and assets (with binaries). CMA errors are surfaced verbatim, including a `details:` block with the underlying response.
@@ -38,7 +42,7 @@ The token is read from `CONTENTFUL_ACCESS_TOKEN` in `.env` at the repo root (the
 
 1. Install the app to your chosen Space.
 2. Navigate to your content model and edit your chosen title field, applying your App Definition (see above) to the field's appearance.
-  - Note: This repo contains an example content model (`exports/space/space-export.json`) that you can import into a blank Space to get a head start (see "Importing a Space Export" above).
+  - Note: This repo contains an example content model (`exports/space/export.json`) that you can import into a blank Space to get a head start (see "Importing a Space Export" above).
 
 ## Configuration for server-side propagation (App Events)
 
@@ -51,14 +55,18 @@ Some fragments derive their value from data outside the entry itself:
 
 Both behaviors are handled by a **single Contentful Function** — `autoEntryTitleHandler` (declared in `contentful-app-manifest.json`, source in `functions/handler/index.ts`). A Contentful App Definition supports only **one** App Event handler function, so the function is a thin **dispatcher** that inspects the incoming `X-Contentful-Topic` header and routes to per-domain modules:
 
+> That cap applies to `appevent.handler` **only**. `appaction.call` functions are unrestricted, which is why the concept-repair action (`functions/handler/actions.ts`) is a second, separate function rather than another branch of this dispatcher — see "Propagating concept edits".
+
 | Topic (Content Event) | Routes to | What it does |
 |---|---|---|
-| `ContentManagement.Entry.publish` | `functions/handler/linkedEntryTitle.ts` | Find every entry that references the published entry via `links_to_entry` and recompute their titles. This drives rename propagation for every `referencedEntryTitle` fragment (Region, Brand, etc.). |
+| `ContentManagement.Entry.publish` | `functions/handler/linkedEntryTitle.ts` | Recompute the **published entry's own** title, then find every entry that references it via `links_to_entry` and recompute those too. The second half drives rename propagation for every `referencedEntryTitle` fragment (Region, Brand, etc.); the first covers a publish made from the Taxonomy tab, where the editor widget isn't mounted. Both are draft writes. |
 | `ContentManagement.Release.create` / `.save` / `.archive` / `.unarchive` | `functions/handler/releaseDate.ts` | Refetch the Release, iterate its entry members, recompute each title (the `publicationDate` fragment will look up the schedule). Archive drops the date prefix; unarchive re-adds it if the ScheduledAction survived. |
 | `ContentManagement.Release.delete` | `functions/handler/releaseDate.ts` | The release is gone by the time the event arrives, so we read the member list from the **event body's** `entities` array (no refetch possible). Recompute titles for those entries to drop the date prefix. |
 | `ContentManagement.ScheduledAction.create` / `.save` / `.delete` | `functions/handler/releaseDate.ts` | Same as Release.save, but only when `entity.sys.linkType === "Release"`. Schedule appears, changes, or disappears. |
 
-For each managed parent, the dispatch path: locate the title field bound to this app via the entry's editor interface → recompute via `composeTitle` (the same composition the editor uses) → idempotency-skip if the new title matches the current → otherwise update the entry as a draft.
+For each managed entry, the dispatch path: locate the title field bound to this app via the entry's editor interface → recompute via `composeTitle` (the same composition the editor uses) → idempotency-skip if the new title matches the current → otherwise `cma.entry.patch` the entry, which writes the **draft** only.
+
+Two consequences of that last step, both deliberate. Patching a published entry leaves it in **"Changed"** state, so a human has to publish again to make the corrected title live — the function never publishes. And because a draft write emits `Entry.save`, which this dispatcher does not route, nothing the function writes can feed back into it (see "Recursion safety").
 
 The function is **declared** in the manifest and **bundled** by `npm run build`, but it does not run until an **App Event Subscription** is created that points the relevant topics at this function. That subscription is a one-time, per-App-Definition setup. We do this manually via the Contentful web UI rather than scripting it.
 
@@ -81,6 +89,19 @@ Do this once, after the app has been uploaded and activated for the first time. 
    - `ScheduledAction.save`
    - `ScheduledAction.delete`
 6. Save the App Definition.
+
+Then, for the taxonomy notation fragment and its repair action:
+
+7. **Authorize the Delivery key for the app's environment** — Space → **Settings → API keys** → the key used for `CONTENTFUL_DELIVERY_KEY` → add every environment the app is installed in. Taxonomy is org-level, so the concepts are identical in every environment; this step is purely about *key authorization*. Skipping it makes concept reads 404 and drops the notation from every title the function rewrites.
+8. **Put the key in `.env` as `CONTENTFUL_DELIVERY_KEY`, then build and upload.** `esbuild.functions.config.js` inlines it into both function bundles as `__DELIVERY_KEY__`; `npm run build` followed by `npm run upload` is what actually delivers it to the deployed function. There is no installation parameter and no console step.
+
+   This is a build-time inline because a **deployed Contentful Function has no environment-variable mechanism** — `.env` is a local build artifact and never reaches the function runtime. The two available channels are this inline and a Secret installation parameter; the inline was chosen so `.env` is the single place the key is configured. Two consequences are real and worth knowing:
+
+   - The key is embedded in the bundle uploaded to Contentful. `build/` is gitignored so it stays out of version control, but **treat built artifacts as containing a credential**.
+   - **Rotating the key requires a rebuild and re-upload.** Changing it in Contentful alone will not update the deployed function.
+
+   The key is read-only and space-scoped, which bounds the exposure. A build with no key set still succeeds — it warns, and the deployed function degrades to titles without notations.
+9. **Create the App Action** — run `npm run upsert-actions` (interactive) or `npm run upsert-actions-ci`. This registers `recomputeConceptTitles` against the App Definition from the `actions[]` block in the manifest. See "Propagating concept edits".
 
 There is no content-type filter at the subscription level — every `Entry.publish` event runs through `links_to_entry`, and `recomputeTitleForEntries` only writes to entries whose title field is bound to this app (matched via the editor interface). So unrelated content types incur a single index lookup at most. `ScheduledAction.*` events are filtered down to Release-targeted actions inside the handler. Subscribing to all nine topics is correct and expected.
 
@@ -105,6 +126,8 @@ Editing the existing subscription in place is supported — toggle topics, chang
 ### Required app permissions
 
 For the function to read editor interfaces and update entries on parents, the App Definition must have CMA permissions sufficient for entry reads + writes. These are configured on the App Definition itself (also in the org-level App Definition settings), not in the Events tab. If the function logs `forbidden` or `unauthorized` errors, that's the place to check.
+
+**Taxonomy reads are the exception: they do not go through app identity at all.** There is no space-scoped CMA taxonomy route — it returns `404` — so `context.cma` cannot read concepts no matter what permissions the App Definition is granted. Concept reads inside the function use the Delivery API with `CONTENTFUL_DELIVERY_KEY` instead. Granting the app more CMA permissions will never fix a failing concept read; check the key's environment authorization instead.
 
 ### Required at build time: `CONTENTFUL_APP_DEF_ID` (build-time inlining via esbuild)
 
@@ -144,8 +167,8 @@ For this app's customer-deployment shape (one bundle, one App Definition), optio
 
 | File | Role |
 |---|---|
-| `esbuild.functions.config.js` | esbuild config that reads `process.env.CONTENTFUL_APP_DEF_ID` and `define`s it as `__APP_DEFINITION_ID__`. |
-| `functions/handler/buildtime.d.ts` | One-line `declare const __APP_DEFINITION_ID__: string;` so TypeScript and editors recognize the global. |
+| `esbuild.functions.config.js` | esbuild config that reads `process.env.CONTENTFUL_APP_DEF_ID` and `define`s it as `__APP_DEFINITION_ID__`, plus `CONTENTFUL_DELIVERY_KEY` as `__DELIVERY_KEY__`. |
+| `functions/handler/buildtime.d.ts` | `declare const` for both globals, so TypeScript and editors recognize them. |
 | `functions/shared/findManagedTitleFieldId.ts` | Uses `__APP_DEFINITION_ID__` in the editor-interface match. |
 | `package.json` (`build:functions` script) | Passes `--esbuild-config esbuild.functions.config.js` to `contentful-app-scripts build-functions`. |
 
@@ -153,6 +176,9 @@ For this app's customer-deployment shape (one bundle, one App Definition), optio
 
 - **If you change which App Definition the bundle is built for**, rebuild and re-upload. The id is baked in.
 - **Tests** stub `globalThis.__APP_DEFINITION_ID__` in a `beforeAll` block (see `functions/handler/linkedEntryTitle.spec.ts`).
+- **`CONTENTFUL_DELIVERY_KEY` is inlined the same way**, as `__DELIVERY_KEY__`, because a deployed Function has no env-var mechanism to read it from. Unlike the app definition id, a missing delivery key does **not** fail the build — it warns, and the function degrades to titles without notations. The tradeoff and its two consequences (a credential inside the uploaded bundle; rotation needs a rebuild + re-upload) are spelled out in "One-time setup", step 8.
+- The org id is **not** inlined — the editor reads it from `sdk.ids.organization`, which the SDK already provides. Don't add a define for it.
+- Both function entry points (`functions/handler/index.ts` and `functions/handler/actions.ts`) are built from this one config and both receive the define.
 
 ## Configuring naming behavior
 
@@ -166,6 +192,19 @@ export const composition: FieldNameComposition = {
 ```
 
 A fragment is any object matching the `Fragment` signature in `src/fragments/types.ts`. Its `subscribe` method receives the SDK plus an `emit(fragment)` callback, subscribes to whatever it needs, and returns a teardown that removes its listeners. `Field.tsx` joins each fragment's most-recent emitted value with the separator and writes the result to the field (skipping the write when the composed value already matches).
+
+The composition also hardcodes the ids it reads: field ids `description` and `regions`, and taxonomy scheme ids `division` and `brand`. There is no per-content-type configuration UI — `src/fragments/index.ts` is the one place to change them.
+
+### `conceptNotation({ schemeIds })`
+
+Emits the concatenated **notations** of the taxonomy concepts assigned to the entry — e.g. an entry tagged `Men's` (notation `M`) and `Double RL` (notation `RRL`) contributes `MRRL`.
+
+- **`schemeIds` is both the filter and the output order.** Only concepts belonging to a listed scheme contribute, and schemes emit in the order given. So the output is independent of the order concepts happen to appear in `metadata.concepts`, and `["division", "brand"]` always yields `M` before `RRL`.
+- **Season and Year are deliberately excluded.** The content model tags all four schemes, but only Division and Brand belong in the title. Adding them is a one-line change to `schemeIds`.
+- **The intra-fragment join is `""`, not the composition separator.** All notations concatenate into a *single* emitted string, so `joinFragments` sees one slot and the `" - "` separator never lands mid-blob — you get `… - MRRL - …`, never `M - RRL`.
+- A concept whose notation is empty, or which belongs to no listed scheme, contributes nothing.
+
+See "Taxonomy notation fragment" below for how the concepts are actually read, which is the non-obvious part.
 
 ## Publication date fragment (Releases & Scheduled Actions)
 
@@ -213,6 +252,8 @@ There are **two separate Contentful entities** at play, and conflating them is t
 
 ### Adding more fragments like this
 
+The other worked example is `conceptNotation` (see "Taxonomy notation fragment"). It is the only fragment that reads `metadata` rather than `fields`, and the only one that needs a capability the shared `FragmentCmaClient` cannot provide — so it is the pattern to copy if your fragment's data lives off the entry's fields or off the space-scoped CMA.
+
 If you add a future fragment whose value comes from outside the entry (e.g., a CMS-external system, a tag/taxonomy lookup, etc.), follow the same pattern: a single helper that takes a CMA client + relevant ids and returns the formatted string, called from both `subscribe` (in the editor session) and `compute` (in the App Event handler). Make sure the editor's `subscribe` returns a teardown that cancels any in-flight async work — `publicationDate` does this with a `cancelled` flag — so a fast unmount/remount doesn't emit stale data into a torn-down slot.
 
 ### Setup
@@ -229,8 +270,9 @@ This is documented because timezone semantics for "what calendar date is this sc
 
 The function will not loop on Release schedule events:
 
-- The dispatcher only routes `Release.*` and `ScheduledAction.*` topics into the schedule handler. Entry updates via `cma.entry.update` produce `Entry.save`, not `Release.save` or `ScheduledAction.*`, so writes from the schedule handler do not feed back into it.
-- Title rewrites on managed parents produce `Entry.save`, not `Entry.publish`, so they don't re-enter the linked-entry rename path. Even if they did publish, `recomputeTitleForEntries` would skip them when the new title matches the current.
+- The dispatcher only routes `Release.*` and `ScheduledAction.*` topics into the schedule handler. Entry writes via `cma.entry.patch` produce `Entry.save`, not `Release.save` or `ScheduledAction.*`, so writes from the schedule handler do not feed back into it.
+- Title rewrites produce `Entry.save`, not `Entry.publish`, so they don't re-enter the linked-entry rename path. Even if they did publish, `recomputeTitleForEntries` would skip them when the new title matches the current.
+- This holds for the **published entry itself**, which the `Entry.publish` path now includes in its recompute set. That entry's correction is the same draft `cma.entry.patch` as any other, so it emits `Entry.save` and the argument above is unchanged. The invariant to preserve: `cma.entry.patch` is the only CMA mutation in the repo, and there are **zero** `.publish()` calls. Adding one here — to clear the "Changed" badge automatically — would make the handler re-enter itself, and the guard would then be behavioural (the idempotency check) rather than structural. It was considered and rejected for exactly that reason.
 - The idempotency guard (skip the CMA write when the new title matches the current) prevents redundant writes even if the same event re-fires.
 
 ### Shared utilities
@@ -238,10 +280,144 @@ The function will not loop on Release schedule events:
 The dispatcher and its per-domain modules use:
 
 - `functions/shared/findManagedTitleFieldId.ts` — locates the title field on a parent entry's editor interface that is bound to this app, returning `null` for unmanaged content types. Also exports `resolveDefaultLocale`.
-- `functions/shared/recomputeTitleForEntries.ts` — the per-parent loop: locate the managed title field, recompute via `composeTitle`, idempotency-skip, write as a draft. Both `linkedEntryTitle.ts` and `releaseDate.ts` end with a call to this helper.
+- `functions/shared/recomputeTitleForEntries.ts` — the per-entry loop: locate the managed title field, recompute via `composeTitle`, idempotency-skip, `cma.entry.patch` the draft. `linkedEntryTitle.ts`, `releaseDate.ts` and `actions.ts` all end with a call to this helper. Entries handed to it must be **CMA-fetched**, never App Event body snapshots — see the header comment in `linkedEntryTitle.ts` for the data-loss reason.
 - `src/fragments/compose.ts` — `composeTitle` is the single source of truth for "what should this entry's title be right now."
 
 If you add a new dispatch route, follow the same shape: identify the affected entries, then call `recomputeTitleForEntries` with the list. Don't reimplement the per-parent loop or skip the idempotency guard — they're part of the contract.
+
+## Taxonomy notation fragment
+
+The counterpart to the publication-date section: `conceptNotation` is the second fragment whose value lives entirely outside the entry's own fields. Read this before changing `src/fragments/concepts.ts`, `src/fragments/conceptReaderBrowser.ts`, or `functions/shared/conceptReaderForFunction.ts`.
+
+What it produces is described under **"Configuring naming behavior"** above. This section is about *how it reads concepts*, which is where all the complexity is.
+
+### Why concepts can't be observed like a field
+
+Taxonomy concepts are **not fields**. They live on the entry's `metadata.concepts` as a flat, mixed-scheme array of `Link<'TaxonomyConcept'>` — e.g. `[2026, mens, rlx, spring]`, with no grouping by scheme. Two consequences:
+
+- `sdk.entry.fields[id].onValueChanged(...)` — the mechanism every other fragment uses — **cannot see them**. `conceptNotation.subscribe` instead pairs `sdk.entry.getMetadata()` for the initial paint with `sdk.entry.onMetadataChanged(cb)` for live updates. Both are on `EntryAPI`.
+- The scheme a concept belongs to is not on the link. It has to come from the concept read itself.
+
+`onMetadataChanged` may fire synchronously on subscribe. That's harmless: `Field.tsx` skips the write when the composed title is unchanged.
+
+#### Expected: the title updates when you switch back to the Editor tab
+
+Concepts are assigned on the entry editor's **Taxonomy** tab. This app renders on the **Editor** tab, and the web app unmounts the inactive tab's DOM — so while you're on Taxonomy, **this app is not running**. Adding or removing a concept therefore does not move the title at that moment; the title updates when you navigate back to the Editor tab.
+
+That is the expected behaviour, and it is not a bug in this app:
+
+- Our iframe is destroyed on tab switch, so no `metadataChanged` message can be delivered to it, and no polling or alternative subscription (`onSysChanged`, a timer, a sidebar location) can change that — none of them run either.
+- On return, `onMetadataChanged` is a `MemoizedSignal`: it replays the current metadata to the listener the instant we resubscribe, which is precisely why switching back applies the change immediately.
+
+The persisted title is still correct in every case — the update lands as soon as the tab is active, and the server-side path is authoritative regardless. The one thing to know is the ordering consequence below.
+
+> **If you publish straight from the Taxonomy tab**, the entry goes live with a title that hasn't been recomputed yet — the widget wasn't mounted to recompute it. The `Entry.publish` handler then recomputes the published entry's own title and corrects it, but as a **draft write**: within a few seconds the entry shows as **"Changed"** with the right title in the draft, and **a human has to publish again** to make it live. The function deliberately does not republish (see "Recursion safety").
+>
+> So this is a safety net, not a fix. Switching back to the Editor tab before publishing still gets it right the first time, as does the App Action in "Propagating concept edits".
+>
+> Two cases where even the draft isn't corrected, both of which log a warning in the function logs rather than writing a wrong title:
+>
+> - **The taxonomy read failed** (missing or unauthorized delivery key). `conceptNotation.compute` returns `null`, which poisons the whole join, and every write path skips — so the stored title is left exactly as it was. Symptom: titles that don't update at all, never titles missing their notation.
+> - **The entry fetch failed.** The handler warns `failed to fetch the published entry "<id>"` and continues with the fan-out; only that one entry's own title goes uncorrected.
+
+### Why the read is per-scheme, not per-concept
+
+Neither transport offers a concept-**id** filter. The management SDK's `GetManyConceptParams` accepts `{ pageUrl }` XOR `{ conceptScheme, query }`; the CDA likewise exposes `conceptScheme` and nothing id-shaped. So the read is inverted: fetch **each scheme once**, build a scheme→concepts map, then walk `metadata.concepts` against it.
+
+That is cheap here — Division and Brand hold 7 concepts total — and it means the scheme is known from the *query* rather than from the response. Which matters, because of a real typing trap: `ConceptProps` is declared as `Omit<Concept, 'conceptSchemes'>` over a base that never declared `conceptSchemes`, so the typed shape is missing a field the wire response actually returns. Knowing the scheme from the query sidesteps that entirely.
+
+Both transports follow cursor pagination via `pages.next` (there is **no `total`** and no `skip` on this collection) up to a page cap, so growing a scheme past one page doesn't silently truncate.
+
+### Where taxonomy actually lives: the scoping table
+
+This is the part that costs an afternoon to rediscover:
+
+| Route | Result |
+|---|---|
+| **CDA** `GET /spaces/{s}/environments/{e}/taxonomy/concepts?conceptScheme={id}` | ✅ **200** — returns `notations` and `conceptSchemes` verbatim |
+| CDA `/concepts`, `/taxonomy/concept_schemes`, `/concept_schemes` | ❌ 404 on both `cdn` and `preview` hosts |
+| **Space-scoped CMA** taxonomy | ❌ **404 — the route does not exist** |
+| **Org-scoped CMA** `concept.getMany` | ✅ works |
+| GraphQL CDA | ❌ no concept/taxonomy root field |
+| An entry's own CDA response | ❌ does not inline concept notations; `includes` has no concept entries |
+
+Taxonomy is **org-level**: the concepts are byte-identical across every environment in the org. So a 404 from the CDA taxonomy route is almost never a missing route or a missing concept — it's the Delivery key not being authorized for that environment.
+
+### Two transports, one pure function
+
+`ConceptReader` is the seam — `(schemeId) => Promise<ConceptRecord[]>`. Both phases of the fragment funnel into the same pure `notationForSchemes(...)`, so the two-phase contract **cannot drift by accident**; a parity test in `conceptNotation.spec.ts` pins `subscribe`'s last emit to `compute`'s return across a table of concept sets.
+
+| | Editor (`subscribe`) | Function (`compute`) |
+|---|---|---|
+| Transport | plain `fetch` against `cdn.contentful.com` | plain `fetch` against `cdn.contentful.com` |
+| Scope | space + environment | space + environment |
+| Credential | `CONTENTFUL_DELIVERY_KEY`, inlined into the browser bundle via `envPrefix` | `CONTENTFUL_DELIVERY_KEY`, inlined at build time as `__DELIVERY_KEY__` |
+| Caching | memoized per scheme, module scope, never invalidated for the session | **uncached** |
+| Built by | `src/fragments/conceptReaderBrowser.ts` | `functions/shared/conceptReaderForFunction.ts` |
+
+Both phases run the **same** `createCdaConceptReader` from `src/fragments/concepts.ts`; only the key's delivery route differs. Three things about this are load-bearing:
+
+- **`sdk.cmaAdapter` cannot read concepts, and never will.** The App SDK's CMA proxy enforces a hardcoded entity allowlist — `CMAClient` in `@contentful/app-sdk/dist/types/cmaClient.types.d.ts` enumerates ~40 entity types and `concept` is **not** among them. Calling it anyway fails at runtime with `You can not access the entity type Concept from within an app.` That is the proxy refusing to route, not a permissions problem: `cmaAdapter` is scoped to `/spaces/{id}/environments/{id}` and taxonomy is **org-level**, so no permission grant, key, or TypeScript cast can reach concepts through it. An earlier version of this app tried exactly that (`conceptReaderSdk.ts`, now deleted) — don't try it again.
+- **A read-only Delivery key ships in the browser bundle.** This is the accepted cost of the above, and it's the ordinary way CDA keys are used in browser apps: it grants published-read on this one space and nothing more. `vite.config.mts` widens `envPrefix` to list `CONTENTFUL_DELIVERY_KEY` **by exact full name** so `.env` stays the single source. **Never widen that to a bare `CONTENTFUL_` prefix** — it would sweep in `CONTENTFUL_ACCESS_TOKEN`, a management PAT, and publish it to every visitor. (`npm run build` then grep the bundle in `build/assets/` to confirm only the delivery key is present.)
+- **App Actions were the alternative, and were rejected.** They are asynchronous-by-design with no synchronous response — you poll `createWithResult` — which would delay the title paint by seconds on every entry open.
+
+The CDA taxonomy endpoint is browser-callable: `access-control-allow-origin: *` with `authorization` among the allowed request headers, verified against `cdn.contentful.com`. No proxy or CORS workaround is needed.
+
+The function reader is deliberately **uncached**: function instances are reused across invocations, and a cache there would defeat the entire point of the repair action — you'd recompute titles from the stale notations you were trying to fix.
+
+### Editor-side staleness
+
+`withConceptCache` memoizes by scheme, in-flight promises included, and is **never invalidated for the session**. If a notation is edited in another tab, the editor shows the old value until the entry is reopened. That is the same accepted staleness window every cross-entry fragment has, and the server-side path is authoritative. Don't add refresh logic to "fix" it.
+
+### Failure behaviour
+
+A reader that rejects, or a context with no `conceptReader` at all, produces `console.warn("[auto-entry-title] conceptNotation: …")` and — importantly — **`null`, not an empty string**. The fragment **never throws from `subscribe`**.
+
+That distinction is the difference between a degraded title and data loss. `""` means "this entry has no notation"; `null` means "I could not find out". Since a title composed without the notation looks perfectly valid, and both write paths persist whatever they compose (the editor autosaves, the Function PATCHes), treating a failed read as `""` would **delete** the `MRRL` blob from entries whose titles were already correct — on every entry open, across a whole publish fan-out. So `null` poisons the join (`joinFragments` returns `null`) and every writer skips the write, leaving the stored title exactly as it was. The warning in the log is the only visible symptom, which is what to grep for when titles stop updating.
+
+Two consequences worth knowing:
+
+- **A missing delivery key now means "titles stop being maintained", not "titles lose their notation".** That is the safer failure, but it is quieter — check the function logs and the browser console for the warning.
+- `conceptReader` is an *optional* context key, so a code path that forgets to thread it through still compiles. It no longer corrupts data, but it does silently stop maintaining titles, which is why the dispatcher forwards it on **both** branches and why `functions/handler/index.spec.ts` asserts it. Note that `npm run build` does not typecheck (`vite build` and vitest both only transpile); run `npx tsc --noEmit` if you want the compiler's opinion.
+
+### Propagating concept edits
+
+Renaming a referenced *entry* propagates via `ContentManagement.Entry.publish` + `links_to_entry`. Editing a *concept's notation* has the reverse index but **no event**:
+
+- ✅ The reverse lookup exists: `entries?metadata.concepts.sys.id[in]={ids}` is the concept analogue of `links_to_entry`.
+- ❌ **No App Event topic fires on a taxonomy change.** Not in the valid-topics list at all. There is nothing to subscribe to, which is why `functions/handler/index.ts` has no concept branch.
+
+So propagation rides an **App Action** instead — `functions/handler/actions.ts`, `accepts: ["appaction.call"]`, invoked manually. It takes a comma-separated `conceptIds` parameter (App Action parameters are limited to `Symbol | Enum | Number | Boolean`, so there is no array type), pages the reverse lookup at 100, and delegates to the **existing** `recomputeTitleForEntries` — the same per-parent loop, idempotency guard, and draft write-back the event handlers use.
+
+> A Contentful App Definition supports only **one** `appevent.handler` function — which is why `index.ts` is a topic dispatcher. That cap does **not** apply to `appaction.call`, so the action is legitimately its own entry point and its own bundle. Don't fold it into the dispatcher.
+
+Recursion safety is inherited: the action patches entries as **drafts**, so it emits `Entry.save`, never `Entry.publish`, and cannot feed back into the rename path. Re-running it is free — the `newTitle === currentTitle` check skips every unchanged entry.
+
+**To invoke it:** create an App Action call against `recomputeConceptTitles` with `{"conceptIds": "mens,doubleRl"}` — via the CMA, the CLI, or `curl`. Register the action first with `npm run upsert-actions`.
+
+If no delivery key was inlined at build time, the action **bails without writing anything** and warns. That is deliberate: recomputing every title with no concept reader would strip the notation from all of them, which is strictly worse than leaving stale titles in place.
+
+#### Known limitations
+
+State these plainly rather than papering over them:
+
+- **An unattended taxonomy edit propagates to nothing** until someone invokes the action, or each affected entry is next opened (whose `subscribe` re-reads live concepts, and the web app autosaves) or next published.
+- **Nothing invokes the action automatically.** Callers are the CMA, the CLI, `curl`, or a future sidebar button. If unattended propagation ever becomes a hard requirement, the only real options are an external scheduled poller diffing `sys.updatedAt` on concepts, or Contentful shipping a taxonomy event topic — both out of scope.
+- **Concept deletion** removes the link from `metadata.concepts`, which is an *entry* change rather than a concept event — same gap, same repair paths.
+- **The CDA reads published taxonomy state.** A concept edit not yet visible to the CDA won't appear. The org-scoped CMA is the read-your-writes path if that ever matters.
+- **Season and Year are excluded by choice**, not by limitation — add them to `schemeIds`.
+
+## Mount-time writes are withheld
+
+**The problem this solves.** `Field.tsx` recomputes after every `emit()`. Synchronous fragments (`contentType`, `fieldValue`) emit immediately; async ones (`publicationDate`, `conceptNotation`, `referencedEntryTitle`) emit only once their lookups resolve. Writing on each emit produced visible flicker — description, then date, then region — and, worse, each intermediate write was a real autosave of a title missing its later pieces.
+
+**How it works now.** Every slot starts as `null` ("unknown"), not `""`. `joinFragments` returns `null` if *any* slot is still unknown, and `recompute` returns early on `null` without touching the field. So the first write happens only once every fragment has reported, and it usually writes nothing at all, because the assembled value already matches what the server-side function persisted.
+
+The same mechanism doubles as the data-loss guard: a fragment that reports `null` because a lookup *failed* (not merely pending) also withholds the write, so a failed taxonomy read leaves the stored title alone instead of autosaving a notation-stripped version of it. See "Failure behaviour" under the taxonomy fragment.
+
+**What this asks of fragment authors:** every `subscribe` path must emit something, guard clauses included. A slot that never emits withholds the title forever. A permanent "there is nothing here" condition — a field id absent from this content type, say — is `""`, not silence; only a genuine unknown is `null`. `fieldValue.ts` and `referencedEntryTitle.ts` show the missing-field branches doing this.
+
+**Why `subscribe` can't just be removed:** the editor needs it to report each fragment's current value on mount. Without it, the first recompute would assemble a title from nothing and erase the date, notation, and region on every entry open.
 
 ## Available Scripts
 
@@ -281,6 +457,14 @@ For this command to work, the following environment variables must be set:
 - `CONTENTFUL_APP_DEF_ID` - The ID of the app to which to add the bundle
 - `CONTENTFUL_ACCESS_TOKEN` - A personal [access token](https://www.contentful.com/developers/docs/references/content-management-api/#/reference/personal-access-tokens)
 
+#### `npm run upsert-actions`
+
+Registers the App Actions declared in the `actions[]` block of `contentful-app-manifest.json` against the App Definition — currently just `recomputeConceptTitles` (see "Propagating concept edits"). Interactive: prompts for org, definition, and token. `npm run upsert-actions-ci` reads the same `CONTENTFUL_ORG_ID` / `CONTENTFUL_APP_DEF_ID` / `CONTENTFUL_ACCESS_TOKEN` trio as `upload-ci`.
+
+Run it once at setup, and again whenever an action's name, description, or parameters change in the manifest.
+
+> **Note:** this command **rewrites `contentful-app-manifest.json` in place**, stamping the remote action id back into each entry and reformatting the file with 2-space JSON. That is `@contentful/app-scripts` behaviour, not ours. Expect a diff on the manifest after running it, and commit it — the stamped id is what makes subsequent runs an update rather than a duplicate create.
+
 #### `npm run import-content-model`
 
 Picks a `.json` export from `exports/space/` (auto-selects if only one, prompts otherwise) and imports it in full — content types, editor interfaces, locales, tags, entries, assets — via `contentful-import`. Prompts for space ID, environment ID, and a y/N confirm (`--yes` skips); reads `CONTENTFUL_ACCESS_TOKEN` from `.env`. Idempotent by `sys.id` — existing entities are updated, not failed. CMA errors surface with a `details:` block.
@@ -309,41 +493,3 @@ to find out more.
 ## Learn More
 
 [Read more](https://www.contentful.com/developers/docs/extensibility/app-framework/create-contentful-app/) and check out the video on how to use the CLI.
-
-## Future improvements
-
-### Eliminate the mount-time title flicker
-
-**Observed:** when opening an entry in the editor, the title field briefly shows intermediate values before settling on the correct final value (e.g., the description appears immediately, then the date prefix appears ~200ms later, then the region appears ~100ms after that).
-
-**Cause:** `Field.tsx` calls `recompute()` after every `emit()`. On mount, synchronous fragments (`staticString`, `contentType`, `fieldValue`) emit immediately, while async fragments (`publicationDate`, `referencedEntryTitle`) emit after their CMA lookups resolve. Each emit triggers a recompute, and each recompute writes a different intermediate string to the field.
-
-**Proposed fix:** defer the first `recompute()` until every fragment has emitted at least once. After that, behave as today.
-
-Sketch:
-
-```ts
-const seen = new Set<number>();
-const total = composition.fragments.length;
-
-const recompute = () => {
-  if (seen.size < total) return; // wait for all initial emits
-  const next = joinFragments(fragments, separator);
-  if (next !== sdk.field.getValue()) sdk.field.setValue(next);
-};
-
-const teardowns = composition.fragments.map((fragment, index) =>
-  fragment.subscribe({
-    sdk,
-    emit: (value) => {
-      fragments[index] = value;
-      seen.add(index);
-      recompute();
-    },
-  }),
-);
-```
-
-**Expected outcome:** on mount, zero intermediate writes; usually zero writes total, because the assembled value matches the persisted value (which the server-side function already wrote). Post-mount reactivity (description edits, region picks) is unchanged — every fragment has already emitted, so each subsequent emit triggers an immediate recompute and write.
-
-**Why not removing `subscribe` entirely:** the editor needs `subscribe` to emit the current value on mount so `recompute()` doesn't strip live values out of the persisted title. Without subscribe, the editor would actively erase the date and region on every entry open.

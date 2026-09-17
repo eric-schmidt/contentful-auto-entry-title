@@ -37,6 +37,44 @@ export const findManagedTitleFieldId = async (
   }
 };
 
+// Memoizes `findManagedTitleFieldId` by content type id for the life of ONE
+// invocation.
+//
+// Why this exists: the recompute loop runs over every entry that references the
+// published one, and those entries overwhelmingly share a content type. Calling
+// the unmemoized lookup per entry meant N identical `editorInterface.get`
+// requests for a value that cannot change mid-invocation — and with the CMA
+// capped at 7 requests/second, that was a direct cause of 429 storms (the
+// give-away in the logs was the same `failed to read editor interface for
+// content type "…"` line repeating within a single requestId).
+//
+// Per-invocation, NOT module scope: function instances are reused across
+// invocations, so a module-level cache would keep serving a stale editor
+// interface after someone rebinds the field in the web app.
+//
+// Failures memoize too — deliberately. The value is already error-tolerant
+// (`null` means "skip this entry"), and retrying a failing content type once
+// per entry is precisely the hammering this removes. The tradeoff: if that one
+// read failed transiently, every entry of that content type is skipped for this
+// invocation rather than some being retried. Skipping is the safer half — a
+// later publish or the repair action picks them up, whereas hammering can take
+// out the whole batch.
+export const createManagedTitleFieldLookup = (
+  cma: PlainClientAPI,
+): ((entry: EntryProps) => Promise<string | null>) => {
+  const byContentType = new Map<string, Promise<string | null>>();
+
+  return (entry: EntryProps) => {
+    const contentTypeId = entry.sys.contentType.sys.id;
+    const cached = byContentType.get(contentTypeId);
+    if (cached) return cached;
+
+    const pending = findManagedTitleFieldId(cma, entry);
+    byContentType.set(contentTypeId, pending);
+    return pending;
+  };
+};
+
 export const resolveDefaultLocale = async (
   cma: PlainClientAPI,
 ): Promise<string> => {

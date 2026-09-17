@@ -78,13 +78,15 @@ describe("fieldValue", () => {
       expect(emit.mock.calls.every(([v]) => v === "")).toBe(true);
     });
 
-    it("warns and no-ops when the field id is missing", () => {
+    it("warns and emits empty when the field id is missing", () => {
       const { sdk, onValueChanged } = buildSdk(null);
       const emit = mockEmitter();
 
       const teardown = fieldValue({ fieldId: "nope" }).subscribe({ sdk, emit });
 
-      expect(emit).not.toHaveBeenCalled();
+      // Must emit, not stay silent: an un-emitted slot counts as UNKNOWN and
+      // Field.tsx withholds the whole title until every slot has answered.
+      expect(emit).toHaveBeenCalledWith("");
       expect(onValueChanged).not.toHaveBeenCalled();
       expect(warnSpy).toHaveBeenCalledOnce();
       expect(typeof teardown).toBe("function");

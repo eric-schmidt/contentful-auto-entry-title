@@ -67,6 +67,9 @@ export const referencedEntryTitle = ({ fieldId }: Options): Fragment => ({
       console.warn(
         `[auto-entry-title] referencedEntryTitle: no field with id "${fieldId}" on this content type.`,
       );
+      // See the identical note in fieldValue.ts: a silent slot reads as UNKNOWN
+      // and would withhold the entire title, so say "nothing to contribute".
+      emit("");
       return () => {};
     }
 

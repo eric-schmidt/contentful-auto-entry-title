@@ -5,6 +5,7 @@
 // trust the event body for member ids (the release is already gone).
 
 import type { EntryProps, PlainClientAPI, ReleaseProps } from "contentful-management";
+import type { ConceptReader } from "../../src/fragments/types";
 import { resolveDefaultLocale } from "../shared/findManagedTitleFieldId";
 import { recomputeTitleForEntries } from "../shared/recomputeTitleForEntries";
 
@@ -27,6 +28,7 @@ type Args = {
   environmentId: string;
   topic: string;
   body: ReleaseProps | ScheduledActionEventBody;
+  conceptReader?: ConceptReader;
 };
 
 type EntryLink = { sys: { type: "Link"; linkType: "Entry"; id: string } };
@@ -92,6 +94,7 @@ export const handleReleaseOrScheduledActionEvent = async ({
   environmentId,
   topic,
   body,
+  conceptReader,
 }: Args): Promise<void> => {
   const releaseId = resolveReleaseId(topic, body);
   if (!releaseId) return;
@@ -136,5 +139,11 @@ export const handleReleaseOrScheduledActionEvent = async ({
     defaultLocale,
     entries,
     context: "releaseDate",
+    conceptReader,
+    // The only branch that opts in. A Release / ScheduledAction event is itself
+    // evidence that a schedule exists, so an empty scheduled-action read here
+    // means "not queryable yet" and is worth waiting out. Everywhere else empty
+    // is the permanent answer and retrying just burns rate limit.
+    awaitScheduleConsistency: true,
   });
 };

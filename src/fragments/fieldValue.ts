@@ -19,6 +19,11 @@ export const fieldValue = ({ fieldId }: FieldValueOptions): Fragment => ({
       console.warn(
         `[auto-entry-title] fieldValue fragment: no field with id "${fieldId}" on this content type.`,
       );
+      // Emit "" rather than staying silent. A slot with no emit is UNKNOWN, and
+      // Field.tsx withholds the whole title until every slot has answered — so
+      // a misconfigured field id would freeze title updates entirely. A field
+      // that doesn't exist has nothing to contribute, which is exactly "".
+      emit("");
       return () => {};
     }
 

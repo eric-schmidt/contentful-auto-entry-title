@@ -64,6 +64,12 @@ const buildSdk = (initialValue = "") => {
       setValue,
     },
     window: { startAutoResizer: vi.fn() },
+    // Field.tsx builds a concept reader keyed by space+environment and backed
+    // by cmaAdapter. The reader is lazy — nothing is requested until a
+    // fragment calls it, and `../fragments` is mocked here — so these only
+    // need to exist, not to work.
+    ids: { space: "test-space", environment: "master", organization: "test-org" },
+    cmaAdapter: { makeRequest: vi.fn() },
   };
 };
 
@@ -117,10 +123,47 @@ describe("Field component", () => {
 
     render(<Field />);
 
+    // Both slots must report before anything is written — see the
+    // withholding test below — so "" is how a slot says "nothing here".
     mocked.__testRefs.emitA("A");
+    mocked.__testRefs.emitB("");
 
     expect(currentSdk.field.setValue).toHaveBeenLastCalledWith("A");
 
+    mocked.__testRefs.emitB("B");
+    expect(currentSdk.field.setValue).toHaveBeenLastCalledWith("A - B");
+  });
+
+  // The clobber guard. A fragment that hasn't answered yet, or that reports
+  // `null` because it couldn't find out (a failed taxonomy read), must not
+  // produce a shortened title — the web app autosaves whatever lands here, so
+  // writing it would delete the notation from a title the server got right.
+  it("withholds the write until every fragment has reported", () => {
+    currentSdk = buildSdk("2026 - MRRL - stored");
+
+    render(<Field />);
+
+    mocked.__testRefs.emitA("A");
+
+    expect(currentSdk.field.setValue).not.toHaveBeenCalled();
+    expect(currentSdk.field.getValue()).toBe("2026 - MRRL - stored");
+
+    mocked.__testRefs.emitB("B");
+    expect(currentSdk.field.setValue).toHaveBeenLastCalledWith("A - B");
+  });
+
+  it("withholds the write when a fragment reports an unknown value", () => {
+    currentSdk = buildSdk("2026 - MRRL - stored");
+
+    render(<Field />);
+
+    mocked.__testRefs.emitA("A");
+    mocked.__testRefs.emitB(null);
+
+    expect(currentSdk.field.setValue).not.toHaveBeenCalled();
+    expect(currentSdk.field.getValue()).toBe("2026 - MRRL - stored");
+
+    // ...and recovers once the value becomes known.
     mocked.__testRefs.emitB("B");
     expect(currentSdk.field.setValue).toHaveBeenLastCalledWith("A - B");
   });

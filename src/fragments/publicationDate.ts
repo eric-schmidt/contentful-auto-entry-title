@@ -34,7 +34,20 @@ type ScheduledActionItem = {
 // retries, our query at the moment Release.save fires returns 0 items even
 // though the schedule will exist within the next second or so. Max ~3.75s
 // total wait.
+//
+// These retries are OPT-IN (`awaitScheduleConsistency`), and that matters for
+// more than latency. The loop retries on an *empty* result, but "empty" is also
+// the correct, permanent answer for any entry that simply isn't scheduled — so
+// when applied indiscriminately every unscheduled entry paid all 5 attempts to
+// learn nothing. Across a publish fan-out that was the largest single source of
+// CMA 429s: 60 of 110 requests for 12 parent entries, against a 7 req/s limit.
+//
+// Only a caller with independent evidence that a schedule should exist — i.e.
+// the Release.* / ScheduledAction.* branch, where the event itself is that
+// evidence — can distinguish "not queryable yet" from "not scheduled". So only
+// that branch opts in.
 const SCHEDULE_LOOKUP_RETRY_DELAYS_MS = [0, 250, 500, 1000, 2000];
+const NO_RETRY_DELAYS_MS = [0];
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -75,6 +88,9 @@ const findScheduledDateForEntry = async (
   cma: FragmentCmaClient,
   entryId: string,
   environmentId: string,
+  // See SCHEDULE_LOOKUP_RETRY_DELAYS_MS: only pass true when something else
+  // already tells you a schedule ought to exist.
+  awaitScheduleConsistency = false,
 ): Promise<string> => {
   // Restrict to active (non-archived) releases. Archived releases can still
   // have an attached ScheduledAction with `sys.status: "scheduled"`, so
@@ -96,7 +112,10 @@ const findScheduledDateForEntry = async (
   const releaseIds = activeReleases.map((r) => r.sys.id);
 
   let filteredItems: ScheduledActionItem[] = [];
-  for (const delay of SCHEDULE_LOOKUP_RETRY_DELAYS_MS) {
+  const delays = awaitScheduleConsistency
+    ? SCHEDULE_LOOKUP_RETRY_DELAYS_MS
+    : NO_RETRY_DELAYS_MS;
+  for (const delay of delays) {
     if (delay > 0) await sleep(delay);
     filteredItems = await fetchMatchingScheduledActions(
       cma,
@@ -149,6 +168,11 @@ export const publicationDate = (): Fragment => ({
       cancelled = true;
     };
   },
-  compute: async ({ entry, cma, environmentId }) =>
-    findScheduledDateForEntry(cma, entry.sys.id, environmentId),
+  compute: async ({ entry, cma, environmentId, awaitScheduleConsistency }) =>
+    findScheduledDateForEntry(
+      cma,
+      entry.sys.id,
+      environmentId,
+      awaitScheduleConsistency,
+    ),
 });

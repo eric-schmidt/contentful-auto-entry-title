@@ -10,6 +10,34 @@
       "entryFile": "functions/handler/index.ts",
       "accepts": ["appevent.handler"],
       "allowNetworks": ["*.contentful.com"]
+    },
+    {
+      "id": "autoEntryTitleActions",
+      "name": "Auto entry title concept recompute",
+      "description": "Recomputes auto-titles for every entry tagged with the given taxonomy concepts. Invoked manually after editing a concept's notation — no App Event topic fires on taxonomy changes.",
+      "path": "functions/handler/actions.js",
+      "entryFile": "functions/handler/actions.ts",
+      "accepts": ["appaction.call"],
+      "allowNetworks": ["*.contentful.com"]
+    }
+  ],
+  "actions": [
+    {
+      "id": "recomputeConceptTitles",
+      "name": "Recompute titles for taxonomy concepts",
+      "description": "Recomputes the auto-generated title of every entry tagged with the listed concepts. Run this after changing a concept's notation.",
+      "type": "function-invocation",
+      "category": "Custom",
+      "functionId": "autoEntryTitleActions",
+      "parameters": [
+        {
+          "id": "conceptIds",
+          "name": "Concept IDs",
+          "description": "Comma-separated taxonomy concept ids, e.g. \"mens,doubleRl\". App Action parameters have no array type, hence the comma-separated Symbol.",
+          "type": "Symbol",
+          "required": true
+        }
+      ]
     }
   ]
 }
