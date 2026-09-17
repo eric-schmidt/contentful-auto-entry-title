@@ -102,7 +102,7 @@ What follows is the part that only bites maintainers:
 ## Conventions
 
 - TypeScript strict, React 18, functional components only.
-- Prettier: `singleQuote: true`, `semi: true`, `printWidth: 80`, `trailingComma: 'es5'`, `arrowParens: 'avoid'`, 2-space indent, LF endings. ESLint extends `react-app` only — no custom rules.
+- Prettier: double quotes, `semi: true`, `printWidth: 80`, `trailingComma: "all"`, `arrowParens: "always"`, 2-space indent, LF endings — see `.prettierrc`. ESLint extends `react-app` only — no custom rules.
 - Commit messages are short imperative sentences ending in a period (e.g. `Add support for naming based off of Brand.`, `Update logic to support Release Delete and (Un)Archive.`). Match this style.
 - Do not hand-edit `exports/space/export.json` — it's a regenerated snapshot artifact. If it needs updating, ask the user how they refresh it rather than patching it inline.
 - The composition assumes the host content type has `description` and `regions` fields, plus the `division` and `brand` taxonomy schemes (Brand is taxonomy-only — there is no `brands` field). There's no per-content-type configuration UI; if you need to support a content type with different field ids, edit `src/fragments/index.ts`. Out of scope to make this configurable until there's a second consumer with a different shape.
