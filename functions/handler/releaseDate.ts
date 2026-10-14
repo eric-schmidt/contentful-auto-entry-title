@@ -14,9 +14,10 @@ const RELEASE_TOPIC_PREFIX = "ContentManagement.Release.";
 const SCHEDULED_ACTION_TOPIC_PREFIX = "ContentManagement.ScheduledAction.";
 const RELEASE_DELETE_TOPIC = "ContentManagement.Release.delete";
 
-// Backoff schedule for retrying the release fetch. Release.save / archive
-// events can fire before the new release-side state is fully queryable; a
-// short retry covers that consistency window. Max wait ~3.75s total.
+// Consistency-window ladder for retrying the release fetch (NOT rate-limit
+// backoff — see ../shared/rateLimit.ts for that). Release.save / archive events
+// can fire before the new release-side state is fully queryable; a short retry
+// covers that window. Max wait ~3.75s total.
 const RELEASE_FETCH_RETRY_DELAYS_MS = [0, 250, 500, 1000, 2000];
 
 type ScheduledActionEventBody = {

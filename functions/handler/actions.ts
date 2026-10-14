@@ -49,6 +49,13 @@ type FunctionContext = {
 export type ActionResult = {
   conceptIds: string[];
   entriesConsidered: number;
+  // Outcome counts from the recompute loop. Present because every per-entry
+  // failure is logged and swallowed, so `entriesConsidered` alone cannot
+  // distinguish a clean run from one that failed on every entry. Omitted when
+  // the action bails before recomputing anything.
+  updated?: number;
+  skipped?: number;
+  failed?: number;
 };
 
 const parseConceptIds = (raw: string | undefined): string[] => [
@@ -98,7 +105,7 @@ export const handler = async (
     CONTEXT,
   );
 
-  await recomputeTitleForEntries({
+  const counts = await recomputeTitleForEntries({
     cma: context.cma,
     environmentId: context.environmentId,
     defaultLocale,
@@ -107,7 +114,13 @@ export const handler = async (
     conceptReader,
   });
 
-  return { conceptIds, entriesConsidered: entries.length };
+  return {
+    conceptIds,
+    entriesConsidered: entries.length,
+    updated: counts.updated,
+    skipped: counts.skipped,
+    failed: counts.failed,
+  };
 };
 
 export default handler;

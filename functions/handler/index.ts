@@ -26,6 +26,14 @@ type AppEvent = {
 // client from `context.cmaClientOptions` fails with `AxiosError: Unknown
 // adapter 'fetch'` because the bundled axios adapter resolution doesn't work
 // inside the Functions runtime — `context.cma` is fetch-backed and works.
+//
+// Consequence worth knowing before reaching for an SDK option: because this
+// client is injected as an `apiAdapter`, it never goes through
+// `RestAdapter`/`createHttpClient`, which is the only place contentful-sdk-core
+// installs its rate-limit interceptor. So `retryOnError` / `retryLimit` /
+// `throttle` are unavailable here (passing them alongside `apiAdapter` is even a
+// type error), and 429 handling has to be explicit — see
+// ../shared/rateLimit.ts.
 type FunctionContext = {
   cma: PlainClientAPI;
   spaceId: string;

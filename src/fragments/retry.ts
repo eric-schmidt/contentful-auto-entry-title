@@ -1,5 +1,13 @@
 // Purpose: the mechanics of "try, wait, try again", and nothing else.
 //
+// NOT rate-limit backoff. This retries on an unsatisfactory *return value* (an
+// empty scheduled-action list, a release without members) while Contentful's
+// read-after-write window settles. A 429 arrives as a THROW, which `attempt`
+// propagates on the first pass — see the throw-propagation case in ./retry.spec.ts.
+// 429/5xx retry is a separate concern with different rules (status codes, the
+// `x-contentful-ratelimit-reset` header, a sleep budget) and lives in
+// functions/shared/rateLimit.ts. Don't graft status handling onto this loop.
+//
 // Two paths need it — the editor's ScheduledAction lookup
 // (./publicationDate.ts) and the Function's release fetch
 // (functions/handler/releaseDate.ts) — because Contentful fires `Release.save`

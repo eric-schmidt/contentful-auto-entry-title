@@ -31,7 +31,7 @@ would 404.
 
 ### Why it exists at all
 
-Editing a concept's *notation* (e.g. changing what `MRRL` renders as) fires
+Editing a concept's _notation_ (e.g. changing what `MRRL` renders as) fires
 **no App Event** — taxonomy changes aren't in the valid-topics list, so
 `functions/handler/index.ts` has nothing to subscribe to. The reverse index
 does exist, so propagation was one trigger short of working. That gap is real.
@@ -75,14 +75,27 @@ Open questions to settle when picking this up:
 
 ### Part 2 — bulk writes, to stop the 429s
 
-**The motivating problem.** `recomputeTitleForEntries` is a sequential
-`for` loop doing one `cma.entry.patch` per entry, with **no 429 handling
-anywhere** — no retry, no backoff, no throttle. The CMA caps around 7 req/s,
-and per entry the loop also spends fragment reads (`referencedEntryTitle` does
-a `cma.entry.get`, `publicationDate` hits scheduled-actions). A concept applied
-to a few hundred entries will rate-limit. This repo has already been burned by
-429 storms once — that is why
-`createManagedTitleFieldLookup` memoizes editor interfaces per content type.
+**The motivating problem — write-side now ADDRESSED.**
+`recomputeTitleForEntries` was a sequential `for` loop doing one
+`cma.entry.patch` per entry with **no 429 handling anywhere**. It now runs
+through `mapWithConcurrency` (limit 3) with each PATCH wrapped in
+`withRateLimitRetry`, and returns `{ considered, updated, skipped, failed }` so
+a caller can tell a clean run from one that failed on every entry. See
+`functions/shared/rateLimit.ts`.
+
+Note for anyone revisiting this: the CMA SDK's own `retryOnError` / `throttle`
+could **not** have been used. They are axios interceptors installed only by
+`RestAdapter`, and both `sdk.cma` and `context.cma` are `apiAdapter` clients
+that bypass it — passing those options there is a type error. Details in
+`AGENTS.md` ("Cross-stack gotchas") and the `rateLimit.ts` header.
+
+Still open: the CMA caps around 7 req/s and per entry the loop also spends
+fragment reads (`referencedEntryTitle` does a `cma.entry.get`, `publicationDate`
+hits scheduled-actions), so **reads remain unthrottled** and a few hundred
+entries still exceeds the 30s invocation — the resumable `skip`/`limit` batching
+is the remaining fix, not more backoff. This repo has already been burned by 429
+storms once — that is why `createManagedTitleFieldLookup` memoizes editor
+interfaces per content type.
 
 **Intended direction:** use the **Bulk Entry Content Operations** API for the
 write side of the action. Confirmed constraints from the docs, all of which
@@ -99,7 +112,7 @@ shape the design:
   job completes**, so error handling has two levels.
 - **Updates are PUT-like and overwrite the whole entry**: each item needs
   `sys.id`, a matching `sys.version`, and **`fields` in full** — omitted fields
-  are **removed**. Our current write is a *surgical JSON-Patch* on one title
+  are **removed**. Our current write is a _surgical JSON-Patch_ on one title
   field. This is the biggest risk in the whole item: getting it wrong deletes
   content. It also means the version-conflict window widens from one PATCH to
   an upload-plus-poll cycle.
@@ -125,7 +138,7 @@ assembled before the job runs.
 
 - **Draft writes only.** `cma.entry.patch` is the only CMA mutation in the repo
   and there are zero `.publish()` calls. That is what makes recursion safety
-  *structural*: draft writes emit `Entry.save`, which the dispatcher doesn't
+  _structural_: draft writes emit `Entry.save`, which the dispatcher doesn't
   route. A bulk **publish** would re-enter the `Entry.publish` handler.
 - **Never write a title composed without a concept reader.** The action already
   bails when no delivery key was inlined. Recomputing every title with no
