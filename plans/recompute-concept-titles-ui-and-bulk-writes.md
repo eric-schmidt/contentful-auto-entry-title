@@ -22,10 +22,10 @@ writes. That is **not reachable from this app**, verified from both directions:
   restricted to space/org **admin user tokens**. App Identity tokens get
   `AccessDenied: "You do not have permissions to create on BulkContentOperation"`.
   Internal support ticket 231133 is this exact scenario (an App Action function
-  that could upload the payload and bulk *publish*, but not bulk *update* nor
-  read job status). Support's verdict: *"There isn't currently a way to grant the
+  that could upload the payload and bulk _publish_, but not bulk _update_ nor
+  read job status). Support's verdict: _"There isn't currently a way to grant the
   app identity itself the BulkContentOperation permissions… expected behavior
-  rather than a misconfiguration."*
+  rather than a misconfiguration."_
 - **From the browser:** `sdk.cma` executes as the app, not the logged-in admin,
   and its allowlist (`@contentful/app-sdk/dist/types/cmaClient.types.d.ts`) has
   no `bulkOperation` key. Raw paths via `sdk.cmaAdapter` are rejected outright.
@@ -56,7 +56,7 @@ skip, needs no new permissions, and also benefits the two event handlers.
 At ~7 req/s and ~3 requests per entry, a few hundred entries needs **minutes**.
 The Function is terminated at 30s **mid-batch, with no retry and no error**, so a
 single-invocation design silently truncates and reports success. Throttling alone
-makes this *worse* (slower ⇒ fewer entries before the axe).
+makes this _worse_ (slower ⇒ fewer entries before the axe).
 
 So the action becomes **resumable**: bounded work per call, with the page driving
 the loop and rendering progress. This also sidesteps a second 30s trap —
@@ -68,19 +68,50 @@ in contentful-management 12.8.0).
 
 ## Part 1 — Server: resumable, throttled writes
 
-### `functions/shared/rateLimit.ts` (new)
+### `functions/shared/rateLimit.ts` — **LANDED**
 
-Two helpers, no dependencies:
+Two helpers, no dependencies, both implemented and specced:
 
-- `mapWithConcurrency(items, limit, fn)` — bounded-parallel map.
-- `withRateLimitRetry(fn, { context })` — retries on 429/5xx honouring
-  `X-Contentful-RateLimit-Reset`, then exponential backoff with jitter.
+- `mapWithConcurrency(items, limit, fn)` — bounded-parallel map, input order
+  preserved.
+- `withRateLimitRetry(fn, { context })` — retries 429/5xx honouring
+  `x-contentful-ratelimit-reset`, then exponential backoff with jitter, bounded
+  by a retry ceiling **and** a total sleep budget (so backoff can't consume the
+  30s invocation).
 
-Build both on the existing `sleep` / `retryOverDelays` in `src/fragments/retry.ts`
-(already in `src/` precisely so `functions/` can import it). `context.cma` does
-**not** guarantee 429 handling — do not rely on SDK retries.
+Built on `sleep` from `src/fragments/retry.ts`, but **not** `retryOverDelays` —
+that one is value-driven, and a 429 is a throw, so it re-throws on the first
+attempt.
 
-### `functions/shared/recomputeTitleForEntries.ts` (edit)
+**Why the SDK cannot do this for us** (verified against contentful-management
+12.8.0 / contentful-sdk-core 9.x, replacing the earlier hedge that `context.cma`
+merely "does not guarantee" 429 handling):
+
+`retryOnError` (default `true`), `retryLimit` (5) and `throttle` are installed by
+sdk-core's `createHttpClient` as **axios interceptors**, and its only caller is
+`RestAdapter`. `createAdapter` never reaches it when an adapter is supplied:
+
+```js
+if ("apiAdapter" in params) {
+  return params.apiAdapter;
+} else {
+  return new RestAdapter(params);
+}
+```
+
+`sdk.cma` (postMessage adapter) and `context.cma` (fetch-backed) are both
+`apiAdapter` clients, so no axios instance exists and no interceptor is
+installed. Those options aren't merely ignored — `ClientOptions` is
+`XOR<RestAdapterParams, AdapterParams>`, so passing them alongside `apiAdapter`
+is a **type error**. Nor can we build our own: 12.8.0 ships only an axios
+adapter, hence `Unknown adapter 'fetch'` in the Functions runtime.
+
+Two corrections to the original wording here: sdk-core reads
+**`x-contentful-ratelimit-reset` in seconds** and does **not** read `Retry-After`
+(this plan previously named it), and it does **not** retry **409** — a
+version-pinned `entry.patch` conflict must not be replayed.
+
+### `functions/shared/recomputeTitleForEntries.ts` (edit) — **LANDED**
 
 - Wrap each `cma.entry.patch` in `withRateLimitRetry`.
 - Run entries through `mapWithConcurrency` at a **low** limit (start at 3;
@@ -104,12 +135,12 @@ Add `skip` and `limit` (App Action params support `Number`) and return a cursor:
 ```ts
 export type ActionResult = {
   conceptIds: string[];
-  entriesConsidered: number;   // kept for backwards compatibility
+  entriesConsidered: number; // kept for backwards compatibility
   updated: number;
   skipped: number;
   failed: number;
-  nextSkip: number | null;     // null === done
-  totalEstimate?: number;      // for the progress bar
+  nextSkip: number | null; // null === done
+  totalEstimate?: number; // for the progress bar
 };
 ```
 
@@ -223,7 +254,7 @@ define is Function-only.
 
 **Registration probe:** on mount, call `sdk.cma.appAction.getManyForEnvironment`
 (allowlisted, defaults supplied) and check the action exists. If not, say "run
-`npm run upsert-actions`" *before* the user clicks, turning an opaque 404 into an
+`npm run upsert-actions`" _before_ the user clicks, turning an opaque 404 into an
 actionable message. Treat a failure of the probe itself as non-blocking.
 
 ### Progress and result UI

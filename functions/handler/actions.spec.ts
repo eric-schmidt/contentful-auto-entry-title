@@ -235,6 +235,54 @@ describe("conceptNotation app action", () => {
     expect(result.entriesConsidered).toBe(101);
   });
 
+  it("retries a 429 on a patch and still updates the entry", async () => {
+    // The whole point of functions/shared/rateLimit.ts: neither `context.cma`
+    // nor `sdk.cma` inherits the SDK's own 429 retry, because both are
+    // `apiAdapter` clients that bypass its axios interceptor.
+    const ctx = buildContext({ entries: [buildEntry({ id: "e1" })] });
+    const rateLimited = new Error(
+      JSON.stringify({ status: 429, message: "rate limit" }),
+    ) as Error & {
+      response: { status: number; headers: Record<string, string> };
+    };
+    rateLimited.name = "RateLimitExceeded";
+    // Zero-second reset keeps the real sleep short; the ~500ms floor still
+    // applies, so this test tolerates a little real time rather than juggling
+    // fake timers through the whole handler.
+    rateLimited.response = {
+      status: 429,
+      headers: { "x-contentful-ratelimit-reset": "0" },
+    };
+    ctx.patch.mockRejectedValueOnce(rateLimited);
+
+    const result = await invoke("doubleRl", ctx);
+
+    expect(ctx.patch).toHaveBeenCalledTimes(2);
+    expect(result.updated).toBe(1);
+    expect(result.failed).toBe(0);
+  });
+
+  it("reports counts so a caller can tell a clean run from a failed one", async () => {
+    const ctx = buildContext({
+      entries: [
+        buildEntry({ id: "e1" }),
+        // Title already correct, so it is skipped rather than patched.
+        buildEntry({ id: "e2", currentTitle: NEW_TITLE }),
+        buildEntry({ id: "e3" }),
+      ],
+    });
+    ctx.patch.mockRejectedValueOnce(new Error("boom"));
+
+    const result = await invoke("doubleRl", ctx);
+
+    expect(result.entriesConsidered).toBe(3);
+    expect(result.skipped).toBe(1);
+    // One of the two patch-eligible entries fails; concurrency means which one
+    // is not deterministic, so assert the split rather than the identity.
+    expect(result.failed).toBe(1);
+    expect(result.updated).toBe(1);
+  });
+
   it("continues the batch when one entry's patch fails", async () => {
     const ctx = buildContext({
       entries: [buildEntry({ id: "e1" }), buildEntry({ id: "e2" })],
